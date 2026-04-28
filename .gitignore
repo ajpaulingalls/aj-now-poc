@@ -40,10 +40,6 @@ yarn-error.*
 /ios
 /android
 
-# bun
-.bun/
-bun.lockb
-
-# database
+# server data
 apps/server/data/
 apps/server/uploads/
