@@ -1,0 +1,12 @@
+{
+  "name": "aj-now-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.0.0"
+  }
+}

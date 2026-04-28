@@ -1,0 +1,13 @@
+{
+  "name": "aj-now-poc",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "mobile": "cd apps/mobile && bun run start",
+    "server": "cd apps/server && bun run dev",
+    "dev": "bun run server & bun run mobile"
+  }
+}
