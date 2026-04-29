@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -146,6 +147,23 @@ function makeAudioMediaAttachment(uri: string, sizeBytes: number, durationMs?: n
     sizeBytes,
     durationMs,
     caption: 'Audio from field capture',
+    capturedAt,
+    uploadStatus: 'pending',
+  };
+}
+
+function makeDocumentMediaAttachment(asset: DocumentPicker.DocumentPickerAsset): MediaAttachment {
+  const capturedAt = new Date().toISOString();
+  const filename = asset.name || filenameFromUri(asset.uri, 'document', capturedAt);
+
+  return {
+    id: makeMediaId(),
+    type: 'document',
+    uri: asset.uri,
+    filename,
+    mimeType: asset.mimeType ?? mediaTypeMimeDefaults.document,
+    sizeBytes: asset.size ?? 0,
+    caption: 'Document from phone files',
     capturedAt,
     uploadStatus: 'pending',
   };
@@ -584,6 +602,25 @@ export default function App() {
     }
   }
 
+  async function attachDocument() {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+        type: '*/*',
+      });
+
+      if (result.canceled || result.assets.length === 0) return;
+
+      const attachment = makeDocumentMediaAttachment(result.assets[0]);
+      setMediaAttachments((current) => [attachment, ...current]);
+      setDraftNotice(`Document attached: ${attachment.filename}`);
+    } catch (error) {
+      console.error('Document picker failed', error);
+      Alert.alert('Document picker failed', 'Unable to attach the selected document.');
+    }
+  }
+
   async function handleMediaAction(type: MediaType) {
     if (type === 'photo' || type === 'video') {
       await addCapturedMediaAttachment(type);
@@ -595,8 +632,7 @@ export default function App() {
       return;
     }
 
-    Alert.alert('Document picker next', 'Photo, video, and audio capture are live now. File/document picking needs the Expo document picker module in the next increment.');
-    setDraftNotice('Document picker is queued for the next media increment.');
+    await attachDocument();
   }
 
   function removeMediaAttachment(id: string) {
@@ -1005,7 +1041,7 @@ export default function App() {
                             ? 'Launch video recorder'
                             : type === 'audio'
                               ? 'Use microphone'
-                              : 'Picker next'}
+                              : 'Pick from Files'}
                       </Text>
                     </Pressable>
                   ))}
