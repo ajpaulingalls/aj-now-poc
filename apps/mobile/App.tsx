@@ -529,32 +529,6 @@ export default function App() {
     }
   }
 
-  async function addLibraryMediaAttachment(type: Extract<MediaType, 'photo' | 'video'>) {
-    if (isCapturingMedia) return;
-
-    setIsCapturingMedia(type);
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: type === 'photo' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
-        allowsEditing: false,
-        quality: type === 'photo' ? 0.82 : 1,
-      });
-
-      if (result.canceled || !result.assets.length) {
-        setDraftNotice(`${mediaTypeLabels[type]} selection cancelled.`);
-        return;
-      }
-
-      setMediaAttachments((current) => [makePickerMediaAttachment(type, result.assets[0]), ...current]);
-      setDraftNotice(`${mediaTypeLabels[type]} selected and attached to this draft.`);
-    } catch (error) {
-      console.error(`Failed to select ${type}`, error);
-      Alert.alert('Selection failed', `Could not select ${mediaTypeLabels[type].toLowerCase()}. Please try again.`);
-    } finally {
-      setIsCapturingMedia(null);
-    }
-  }
-
   async function startAudioRecording() {
     if (audioRecording || isCapturingMedia) return;
 
