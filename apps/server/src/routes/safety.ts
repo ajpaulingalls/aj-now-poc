@@ -7,7 +7,7 @@ export const safetyRoutes = new Hono();
 safetyRoutes.post('/checkin', async (c) => {
   const body = await c.req.json();
   const id = generateId();
-  
+
   db.run(`
     INSERT INTO safety_checkins (id, user_id, latitude, longitude, altitude, accuracy, status, message)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -16,7 +16,7 @@ safetyRoutes.post('/checkin', async (c) => {
     body.latitude, body.longitude, body.altitude || null, body.accuracy || null,
     body.status || 'safe', body.message || null,
   ]);
-  
+
   return c.json({ success: true, data: { id, status: body.status || 'safe', timestamp: new Date().toISOString() } }, 201);
 });
 
@@ -24,14 +24,14 @@ safetyRoutes.post('/checkin', async (c) => {
 safetyRoutes.post('/panic', async (c) => {
   const body = await c.req.json();
   const id = generateId();
-  
+
   db.run(`
     INSERT INTO safety_checkins (id, user_id, latitude, longitude, status, message)
     VALUES (?, ?, ?, ?, 'emergency', ?)
   `, [id, body.userId || 'usr_005', body.latitude, body.longitude, 'EMERGENCY ALERT TRIGGERED']);
-  
+
   console.log('🚨 PANIC ALERT from user', body.userId, 'at', body.latitude, body.longitude);
-  
+
   return c.json({ success: true, data: { id, status: 'emergency', acknowledged: true } }, 201);
 });
 

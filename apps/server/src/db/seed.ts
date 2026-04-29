@@ -30,11 +30,46 @@ export function seedDatabase() {
 
   // Assignments
   const assignments = [
-    { id: 'asgn_001', title: 'Ceasefire Negotiations Update', slug: 'ceasefire-negotiations-update', description: 'Cover the latest round of ceasefire negotiations. Include reactions from both sides and analysis from diplomatic sources. File 2-minute package + text.', priority: 'breaking', status: 'in_progress', assigned_to: 'usr_001', assigned_by: 'usr_004', bureau: 'Gaza', latitude: 31.5, longitude: 34.47, place_name: 'Gaza City', deadline: new Date(Date.now() + 4 * 3600000).toISOString(), tags: '["conflict", "diplomacy", "middle-east"]' },
-    { id: 'asgn_002', title: 'US Election Campaign Trail', slug: 'us-election-campaign-trail', description: 'Follow the campaign trail in swing states. Get voter reactions and campaign rally footage. Daily packages required.', priority: 'urgent', status: 'accepted', assigned_to: 'usr_002', assigned_by: 'usr_004', bureau: 'Washington DC', latitude: 38.9, longitude: -77.04, place_name: 'Washington, DC', deadline: new Date(Date.now() + 24 * 3600000).toISOString(), tags: '["politics", "elections", "us"]' },
-    { id: 'asgn_003', title: 'Refugee Crisis: Lebanese Border', slug: 'refugee-crisis-lebanese-border', description: 'Document conditions at refugee camps along the Lebanese border. Interview displaced families and aid workers. Sensitive content — follow editorial guidelines.', priority: 'standard', status: 'pending', assigned_to: 'usr_003', assigned_by: 'usr_004', bureau: 'Beirut', latitude: 33.89, longitude: 35.5, place_name: 'Beirut', deadline: new Date(Date.now() + 72 * 3600000).toISOString(), tags: '["humanitarian", "refugees", "lebanon"]' },
-    { id: 'asgn_004', title: 'Climate Summit Preview', slug: 'climate-summit-preview', description: 'Preview piece for the upcoming climate summit. Interview key delegates and environmental experts. 3-minute package.', priority: 'feature', status: 'pending', assigned_to: 'usr_005', assigned_by: 'usr_004', bureau: 'London', latitude: 51.51, longitude: -0.13, place_name: 'London', deadline: new Date(Date.now() + 168 * 3600000).toISOString(), tags: '["climate", "environment", "summit"]' },
-    { id: 'asgn_005', title: 'Tech Industry Layoffs Impact', slug: 'tech-industry-layoffs-impact', description: 'Investigate the human impact of mass layoffs in the tech sector. Interview affected workers, economists. Feature-length report.', priority: 'standard', status: 'accepted', assigned_to: 'usr_005', assigned_by: 'usr_004', bureau: 'London', latitude: 51.51, longitude: -0.13, place_name: 'London', deadline: new Date(Date.now() + 120 * 3600000).toISOString(), tags: '["technology", "economy", "labor"]' },
+    {
+      id: 'asgn_001', title: 'Ceasefire Negotiations Update', slug: 'ceasefire-negotiations-update',
+      description: 'Cover the latest round of ceasefire negotiations. Include reactions from both sides and analysis from diplomatic sources. File 2-minute package + text.',
+      priority: 'breaking', status: 'in_progress', assigned_to: 'usr_001', assigned_by: 'usr_004',
+      bureau: 'Gaza', latitude: 31.5, longitude: 34.47, place_name: 'Gaza City',
+      deadline: new Date(Date.now() + 4 * 3600000).toISOString(),
+      tags: '["conflict", "diplomacy", "middle-east"]'
+    },
+    {
+      id: 'asgn_002', title: 'US Election Campaign Trail', slug: 'us-election-campaign-trail',
+      description: 'Follow the campaign trail in swing states. Get voter reactions and campaign rally footage. Daily packages required.',
+      priority: 'urgent', status: 'accepted', assigned_to: 'usr_002', assigned_by: 'usr_004',
+      bureau: 'Washington DC', latitude: 38.9, longitude: -77.04, place_name: 'Washington, DC',
+      deadline: new Date(Date.now() + 24 * 3600000).toISOString(),
+      tags: '["politics", "elections", "us"]'
+    },
+    {
+      id: 'asgn_003', title: 'Refugee Crisis: Lebanese Border', slug: 'refugee-crisis-lebanese-border',
+      description: 'Document conditions at refugee camps along the Lebanese border. Interview displaced families and aid workers. Sensitive content — follow editorial guidelines.',
+      priority: 'standard', status: 'pending', assigned_to: 'usr_003', assigned_by: 'usr_004',
+      bureau: 'Beirut', latitude: 33.89, longitude: 35.5, place_name: 'Beirut',
+      deadline: new Date(Date.now() + 72 * 3600000).toISOString(),
+      tags: '["humanitarian", "refugees", "lebanon"]'
+    },
+    {
+      id: 'asgn_004', title: 'Climate Summit Preview', slug: 'climate-summit-preview',
+      description: 'Preview piece for the upcoming climate summit. Interview key delegates and environmental experts. 3-minute package.',
+      priority: 'feature', status: 'pending', assigned_to: 'usr_005', assigned_by: 'usr_004',
+      bureau: 'London', latitude: 51.51, longitude: -0.13, place_name: 'London',
+      deadline: new Date(Date.now() + 168 * 3600000).toISOString(),
+      tags: '["climate", "environment", "summit"]'
+    },
+    {
+      id: 'asgn_005', title: 'Tech Industry Layoffs Impact', slug: 'tech-industry-layoffs-impact',
+      description: 'Investigate the human impact of mass layoffs in the tech sector. Interview affected workers, economists. Feature-length report.',
+      priority: 'standard', status: 'accepted', assigned_to: 'usr_005', assigned_by: 'usr_004',
+      bureau: 'London', latitude: 51.51, longitude: -0.13, place_name: 'London',
+      deadline: new Date(Date.now() + 120 * 3600000).toISOString(),
+      tags: '["technology", "economy", "labor"]'
+    },
   ];
 
   const insertAssignment = db.prepare(`
@@ -46,10 +81,25 @@ export function seedDatabase() {
     insertAssignment.run(a.id, a.title, a.slug, a.description, a.priority, a.status, a.assigned_to, a.assigned_by, a.bureau, a.latitude, a.longitude, a.place_name, a.deadline, a.tags);
   }
 
-  // Stories
+  // Stories (some drafts)
   const stories = [
-    { id: 'story_001', assignment_id: 'asgn_001', headline: 'Ceasefire Talks Enter Critical Phase', slug: 'ceasefire-talks-critical-phase', body: 'Negotiations between the warring parties entered a critical phase today as mediators pushed for a 72-hour humanitarian pause. Sources close to the talks say...', summary: 'Latest update on ceasefire negotiations with both sides showing cautious optimism.', tags: '["conflict", "diplomacy"]', status: 'draft', filed_by: 'usr_001', filed_at: null, latitude: 31.5, longitude: 34.47, place_name: 'Gaza City' },
-    { id: 'story_002', assignment_id: 'asgn_002', headline: 'Swing State Voters Express Frustration', slug: 'swing-state-voters-frustration', body: 'Across key battleground states, voters are expressing growing frustration with both candidates. In Pennsylvania, where the margin could decide the election...', summary: 'Voter sentiment analysis from key swing states ahead of the election.', tags: '["politics", "elections"]', status: 'filed', filed_by: 'usr_002', filed_at: new Date(Date.now() - 2 * 3600000).toISOString(), latitude: 39.95, longitude: -75.17, place_name: 'Philadelphia, PA' },
+    {
+      id: 'story_001', assignment_id: 'asgn_001', headline: 'Ceasefire Talks Enter Critical Phase',
+      slug: 'ceasefire-talks-critical-phase',
+      body: 'Negotiations between the warring parties entered a critical phase today as mediators pushed for a 72-hour humanitarian pause. Sources close to the talks say...',
+      summary: 'Latest update on ceasefire negotiations with both sides showing cautious optimism.',
+      tags: '["conflict", "diplomacy"]', status: 'draft', filed_by: 'usr_001',
+      latitude: 31.5, longitude: 34.47, place_name: 'Gaza City'
+    },
+    {
+      id: 'story_002', assignment_id: 'asgn_002', headline: 'Swing State Voters Express Frustration',
+      slug: 'swing-state-voters-frustration',
+      body: 'Across key battleground states, voters are expressing growing frustration with both candidates. In Pennsylvania, where the margin could decide the election...',
+      summary: 'Voter sentiment analysis from key swing states ahead of the election.',
+      tags: '["politics", "elections"]', status: 'filed', filed_by: 'usr_002',
+      filed_at: new Date(Date.now() - 2 * 3600000).toISOString(),
+      latitude: 39.95, longitude: -75.17, place_name: 'Philadelphia, PA'
+    },
   ];
 
   const insertStory = db.prepare(`
@@ -58,7 +108,7 @@ export function seedDatabase() {
   `);
 
   for (const s of stories) {
-    insertStory.run(s.id, s.assignment_id, s.headline, s.slug, s.body, s.summary, s.tags, s.status, s.filed_by, s.filed_at, s.latitude, s.longitude, s.place_name);
+    insertStory.run(s.id, s.assignment_id, s.headline, s.slug, s.body, s.summary, s.tags, s.status, s.filed_by, (s as any).filed_at || null, s.latitude, s.longitude, s.place_name);
   }
 
   // Safety check-ins

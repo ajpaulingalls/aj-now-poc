@@ -7,19 +7,19 @@ export const assignmentRoutes = new Hono();
 assignmentRoutes.get('/', (c) => {
   const userId = c.req.query('userId') || 'usr_005';
   const status = c.req.query('status');
-  
+
   let query = 'SELECT * FROM assignments WHERE assigned_to = ?';
   const params: any[] = [userId];
-  
+
   if (status) {
     query += ' AND status = ?';
     params.push(status);
   }
-  
+
   query += ' ORDER BY CASE priority WHEN "breaking" THEN 0 WHEN "urgent" THEN 1 WHEN "standard" THEN 2 WHEN "feature" THEN 3 END, created_at DESC';
-  
+
   const assignments = db.query(query).all(...params);
-  
+
   return c.json({
     success: true,
     data: assignments.map(formatAssignment),

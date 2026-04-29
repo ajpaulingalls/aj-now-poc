@@ -7,7 +7,7 @@ export const authRoutes = new Hono();
 authRoutes.post('/login', async (c) => {
   const { email } = await c.req.json();
   const user = db.query('SELECT * FROM users WHERE email = ?').get(email) as any;
-  
+
   if (!user) {
     return c.json({ success: false, error: 'Invalid credentials' }, 401);
   }

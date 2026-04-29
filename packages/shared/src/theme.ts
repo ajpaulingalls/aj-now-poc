@@ -10,7 +10,7 @@ export const colors = {
   breaking: '#C31833',
   breakingLight: '#FDE8EC',
   error: '#E00102',
-  
+
   // Grays
   gray900: '#1A1A1A',
   gray800: '#333333',
@@ -39,7 +39,7 @@ export const colors = {
 
 export const typography = {
   families: {
-    primary: 'System',      // Will use system font on mobile
+    primary: 'System',
     heading: 'System',
     mono: 'monospace',
   },

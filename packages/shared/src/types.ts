@@ -36,11 +36,11 @@ export interface Assignment {
   description: string;
   priority: AssignmentPriority;
   status: AssignmentStatus;
-  assignedTo: string;
-  assignedBy: string;
+  assignedTo: string;      // user ID
+  assignedBy: string;      // editor user ID
   bureau: string;
   location?: GeoLocation;
-  deadline?: string;
+  deadline?: string;       // ISO date
   tags: string[];
   createdAt: string;
   updatedAt: string;

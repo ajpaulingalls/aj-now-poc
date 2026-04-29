@@ -16,7 +16,7 @@ app.use('*', cors());
 app.use('*', logger());
 
 // Health check
-app.get('/', (c) => c.json({ 
+app.get('/', (c) => c.json({
   name: 'AJ Now API',
   version: '1.0.0',
   status: 'running',
