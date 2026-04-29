@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -13,12 +14,24 @@ import {
   View,
 } from 'react-native';
 import type { Assignment, Story, User } from '@aj-now/shared';
-import { COLORS, SPACING } from '@aj-now/shared';
+import { colors, spacing } from '@aj-now/shared';
 
 type ApiEnvelope<T> = { success: boolean; data?: T; error?: string };
+type LocalDraft = {
+  id: string;
+  title: string;
+  body: string;
+  assignmentId?: string;
+  summary?: string;
+  tags: string[];
+  status: 'queued' | 'syncing';
+  createdAt: string;
+  updatedAt: string;
+};
 type TabKey = 'briefing' | 'assignments' | 'capture' | 'offline' | 'profile';
 
 const API_BASE = 'http://localhost:3001/api';
+const LOCAL_DRAFTS_KEY = '@aj-now/local-drafts:v1';
 const DEMO_EMAIL = 'leila.hassan@aljazeera.net';
 
 const tabs: Array<{ key: TabKey; label: string }> = [
@@ -35,6 +48,10 @@ const priorityColor: Record<string, string> = {
   standard: '#2563EB',
   feature: '#7C3AED',
 };
+
+function makeLocalDraftId() {
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function formatTime(value?: string) {
   if (!value) return 'No deadline';
@@ -65,6 +82,10 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+  const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
+  const [localDraftsLoaded, setLocalDraftsLoaded] = useState(false);
+  const [syncingDraftId, setSyncingDraftId] = useState<string | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('Market reaction from Doha');
   const [draftBody, setDraftBody] = useState(
@@ -107,11 +128,111 @@ export default function App() {
 
   useEffect(() => {
     loadData();
+    loadLocalDrafts();
   }, []);
+
+  useEffect(() => {
+    if (!localDraftsLoaded) return;
+    AsyncStorage.setItem(LOCAL_DRAFTS_KEY, JSON.stringify(localDrafts)).catch(() => {
+      // Local persistence failure should not block capture; the UI still keeps in-memory drafts.
+    });
+  }, [localDrafts, localDraftsLoaded]);
 
   async function refresh() {
     setRefreshing(true);
     await loadData(false);
+  }
+
+  async function loadLocalDrafts() {
+    try {
+      const raw = await AsyncStorage.getItem(LOCAL_DRAFTS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as LocalDraft[]) : [];
+      setLocalDrafts(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setDraftNotice('Unable to restore saved offline drafts on this device.');
+    } finally {
+      setLocalDraftsLoaded(true);
+    }
+  }
+
+  function buildLocalDraft(): LocalDraft {
+    const now = new Date().toISOString();
+    return {
+      id: makeLocalDraftId(),
+      title: draftTitle.trim() || 'Untitled field draft',
+      body: draftBody.trim(),
+      assignmentId: activeAssignments[0]?.id,
+      tags: ['offline', 'field-report'],
+      status: 'queued',
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  async function saveOfflineDraft(showAlert = true) {
+    if (!draftBody.trim() && !draftTitle.trim()) {
+      Alert.alert('Nothing to save', 'Add a title or field notes before saving an offline draft.');
+      return null;
+    }
+    const draft = buildLocalDraft();
+    setLocalDrafts((current) => [draft, ...current]);
+    setDraftTitle('');
+    setDraftBody('');
+    setDraftNotice('Draft saved to the offline queue on this device.');
+    setActiveTab('offline');
+    if (showAlert) Alert.alert('Saved offline', 'This draft will remain on this device until you sync or discard it.');
+    return draft;
+  }
+
+  async function syncLocalDraft(draft: LocalDraft) {
+    if (!user) {
+      Alert.alert('Profile unavailable', 'Refresh the app before syncing local drafts.');
+      return;
+    }
+    setSyncingDraftId(draft.id);
+    setLocalDrafts((current) => current.map((item) => (item.id === draft.id ? { ...item, status: 'syncing' } : item)));
+    try {
+      const summary = await api<{ summary: string; tags: string[]; suggestedTitle: string }>('/ai/summarize', {
+        method: 'POST',
+        body: JSON.stringify({ title: draft.title, text: draft.body }),
+      }).catch(() => ({ summary: draft.body.slice(0, 160), tags: draft.tags, suggestedTitle: draft.title }));
+
+      const story = await api<Story>('/stories', {
+        method: 'POST',
+        body: JSON.stringify({
+          assignmentId: draft.assignmentId || activeAssignments[0]?.id,
+          authorId: user.id,
+          title: summary.suggestedTitle || draft.title,
+          body: draft.body,
+          summary: summary.summary,
+          tags: summary.tags,
+          language: 'en',
+          status: 'draft',
+        }),
+      });
+      setStories((current) => [story, ...current]);
+      setLocalDrafts((current) => current.filter((item) => item.id !== draft.id));
+      setDraftNotice('Offline draft synced to the newsroom draft queue.');
+    } catch (err) {
+      setLocalDrafts((current) => current.map((item) => (item.id === draft.id ? { ...item, status: 'queued' } : item)));
+      Alert.alert('Unable to sync draft', err instanceof Error ? err.message : 'Draft remains safely queued offline.');
+    } finally {
+      setSyncingDraftId(null);
+    }
+  }
+
+  function discardLocalDraft(draft: LocalDraft) {
+    Alert.alert('Discard offline draft?', draft.title, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          setLocalDrafts((current) => current.filter((item) => item.id !== draft.id));
+          setDraftNotice('Offline draft discarded.');
+        },
+      },
+    ]);
   }
 
   async function updateAssignment(assignment: Assignment, status: Assignment['status']) {
@@ -128,6 +249,10 @@ export default function App() {
 
   async function submitStory() {
     if (!user) return;
+    if (!draftBody.trim() && !draftTitle.trim()) {
+      Alert.alert('Nothing to save', 'Add a title or field notes before saving a draft.');
+      return;
+    }
     const assignmentId = activeAssignments[0]?.id;
     try {
       const summary = await api<{ summary: string; tags: string[]; suggestedTitle: string }>('/ai/summarize', {
@@ -151,9 +276,11 @@ export default function App() {
       setStories((current) => [story, ...current]);
       setDraftTitle('');
       setDraftBody('');
+      setDraftNotice('Draft saved to the newsroom queue.');
       setActiveTab('offline');
     } catch (err) {
-      Alert.alert('Unable to save draft', err instanceof Error ? err.message : 'Please try again.');
+      await saveOfflineDraft(false);
+      Alert.alert('Saved offline instead', err instanceof Error ? err.message : 'Backend unavailable. Draft remains on this device.');
     }
   }
 
@@ -189,7 +316,7 @@ export default function App() {
 
       {loading ? (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={COLORS.gold} />
+          <ActivityIndicator size="large" color={colors.accent} />
           <Text style={styles.loadingText}>Loading assignments and field queue…</Text>
         </View>
       ) : error ? (
@@ -204,7 +331,7 @@ export default function App() {
       ) : (
         <ScrollView
           style={styles.content}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={COLORS.gold} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.accent} />}
         >
           {activeTab === 'briefing' && (
             <View style={styles.section}>
@@ -215,6 +342,7 @@ export default function App() {
                 <Metric label="Active" value={activeAssignments.length.toString()} />
                 <Metric label="Breaking" value={breakingAssignments.length.toString()} tone="red" />
                 <Metric label="Drafts" value={stories.length.toString()} />
+                <Metric label="Offline" value={localDrafts.length.toString()} tone={localDrafts.length > 0 ? 'red' : undefined} />
               </View>
 
               <View style={styles.card}>
@@ -254,6 +382,7 @@ export default function App() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Story capture</Text>
               <Text style={styles.subtle}>PoC draft composer with AI summary/tag simulation through the backend.</Text>
+              {draftNotice && <Text style={styles.noticeText}>{draftNotice}</Text>}
               <View style={styles.card}>
                 <Text style={styles.inputLabel}>Story title</Text>
                 <TextInput value={draftTitle} onChangeText={setDraftTitle} style={styles.input} placeholder="Working headline" />
@@ -271,9 +400,15 @@ export default function App() {
                   <CaptureAction label="Audio" detail="Transcript" />
                   <CaptureAction label="Location" detail="Geo tag" />
                 </View>
-                <Pressable style={styles.primaryButton} onPress={submitStory}>
-                  <Text style={styles.primaryButtonText}>Save AI-assisted draft</Text>
-                </Pressable>
+                <View style={styles.buttonStack}>
+                  <Pressable style={styles.secondaryButton} onPress={() => saveOfflineDraft()}>
+                    <Text style={styles.secondaryButtonText}>Save offline draft</Text>
+                  </Pressable>
+                  <Pressable style={styles.primaryButton} onPress={submitStory}>
+                    <Text style={styles.primaryButtonText}>Save AI-assisted draft</Text>
+                  </Pressable>
+                </View>
+                <Text style={styles.hintSmall}>If the backend is unavailable, AI-assisted save automatically falls back to the offline queue.</Text>
               </View>
             </View>
           )}
@@ -282,9 +417,31 @@ export default function App() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Offline queue</Text>
               <Text style={styles.subtle}>Drafts and captured media prepared for sync when connectivity returns.</Text>
-              {stories.length === 0 ? (
+              {draftNotice && <Text style={styles.noticeText}>{draftNotice}</Text>}
+
+              {localDrafts.length > 0 && (
+                <View style={styles.queueGroup}>
+                  <Text style={styles.cardTitle}>Pending on this device</Text>
+                  {localDrafts.map((draft) => (
+                    <LocalDraftCard
+                      key={draft.id}
+                      draft={draft}
+                      syncing={syncingDraftId === draft.id}
+                      onSync={() => syncLocalDraft(draft)}
+                      onDiscard={() => discardLocalDraft(draft)}
+                    />
+                  ))}
+                </View>
+              )}
+
+              {stories.length === 0 && localDrafts.length === 0 ? (
                 <View style={styles.card}><Text style={styles.subtle}>No local drafts yet.</Text></View>
-              ) : stories.map((story) => <StoryCard key={story.id} story={story} />)}
+              ) : (
+                <View style={styles.queueGroup}>
+                  <Text style={styles.cardTitle}>Newsroom drafts</Text>
+                  {stories.map((story) => <StoryCard key={story.id} story={story} />)}
+                </View>
+              )}
             </View>
           )}
 
@@ -364,15 +521,47 @@ function CaptureAction({ label, detail }: { label: string; detail: string }) {
   );
 }
 
+function LocalDraftCard({
+  draft,
+  syncing,
+  onSync,
+  onDiscard,
+}: {
+  draft: LocalDraft;
+  syncing: boolean;
+  onSync: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <View style={styles.offlineCard}>
+      <View style={styles.cardHeaderRow}>
+        <Text style={styles.assignmentTitle}>{draft.title}</Text>
+        <View style={styles.offlinePill}><Text style={styles.offlinePillText}>{draft.status}</Text></View>
+      </View>
+      <Text style={styles.assignmentBody}>{draft.summary || draft.body.slice(0, 180)}</Text>
+      <Text style={styles.assignmentMeta}>Saved {formatTime(draft.updatedAt)} · Stored on device</Text>
+      <View style={styles.tagRow}>{draft.tags.slice(0, 4).map((tag) => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
+      <View style={styles.actionRow}>
+        <Pressable style={styles.primaryButtonSmall} onPress={onSync} disabled={syncing}>
+          <Text style={styles.primaryButtonText}>{syncing ? 'Syncing…' : 'Sync now'}</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryButtonSmall} onPress={onDiscard} disabled={syncing}>
+          <Text style={styles.secondaryButtonText}>Discard</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function StoryCard({ story }: { story: Story }) {
   return (
     <View style={styles.card}>
       <View style={styles.cardHeaderRow}>
-        <Text style={styles.assignmentTitle}>{story.title}</Text>
+        <Text style={styles.assignmentTitle}>{story.headline}</Text>
         <View style={styles.statusPill}><Text style={styles.statusText}>{story.status}</Text></View>
       </View>
       <Text style={styles.assignmentBody}>{story.summary || story.body?.slice(0, 180)}</Text>
-      <Text style={styles.assignmentMeta}>Updated {formatTime(story.updatedAt)} · {story.language?.toUpperCase()}</Text>
+      <Text style={styles.assignmentMeta}>Updated {formatTime(story.updatedAt)} · EN</Text>
       <View style={styles.tagRow}>{story.tags?.slice(0, 4).map((tag) => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
     </View>
   );
@@ -382,26 +571,26 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#050505' },
   header: {
     backgroundColor: '#050505',
-    paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.lg,
-    paddingBottom: SPACING.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  eyebrow: { color: COLORS.gold, fontSize: 12, fontWeight: '800', letterSpacing: 1.4, textTransform: 'uppercase' },
+  eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1.4, textTransform: 'uppercase' },
   title: { color: '#FFFFFF', fontSize: 34, fontWeight: '900', marginTop: 2 },
   livePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#102A1E', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   liveDot: { color: '#22C55E', marginRight: 5, fontSize: 10 },
   liveText: { color: '#BBF7D0', fontSize: 11, fontWeight: '800' },
-  tabBar: { backgroundColor: '#050505', paddingHorizontal: SPACING.md, paddingBottom: SPACING.md, gap: 8 },
+  tabBar: { backgroundColor: '#050505', paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: 8 },
   tab: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, backgroundColor: '#171717', borderWidth: 1, borderColor: '#2A2A2A' },
-  tabActive: { backgroundColor: COLORS.gold, borderColor: COLORS.gold },
+  tabActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   tabText: { color: '#D4D4D4', fontWeight: '700' },
   tabTextActive: { color: '#111111' },
   content: { flex: 1, backgroundColor: '#F5F1E8' },
-  section: { padding: SPACING.lg, gap: SPACING.md },
-  centered: { flex: 1, backgroundColor: '#F5F1E8', alignItems: 'center', justifyContent: 'center', padding: SPACING.xl },
+  section: { padding: spacing.lg, gap: spacing.md },
+  centered: { flex: 1, backgroundColor: '#F5F1E8', alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   loadingText: { marginTop: 12, color: '#44403C', fontWeight: '700' },
   errorTitle: { fontSize: 22, fontWeight: '900', color: '#111827', marginBottom: 8 },
   errorText: { textAlign: 'center', color: '#7F1D1D', marginBottom: 8 },
@@ -409,17 +598,21 @@ const styles = StyleSheet.create({
   welcome: { fontSize: 28, fontWeight: '900', color: '#111827' },
   sectionTitle: { fontSize: 26, fontWeight: '900', color: '#111827' },
   subtle: { color: '#57534E', fontSize: 15, lineHeight: 22 },
-  metricsRow: { flexDirection: 'row', gap: SPACING.sm },
-  metricCard: { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 18, padding: SPACING.md, borderWidth: 1, borderColor: '#E7E0D1' },
+  noticeText: { color: '#7C2D12', backgroundColor: '#FFEDD5', borderRadius: 14, padding: 12, fontWeight: '800', lineHeight: 20 },
+  hintSmall: { color: '#78716C', fontSize: 12, lineHeight: 18, marginTop: 2 },
+  metricsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  metricCard: { flexGrow: 1, flexBasis: '47%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: spacing.md, borderWidth: 1, borderColor: '#E7E0D1' },
   metricValue: { fontSize: 30, fontWeight: '900', color: '#111827' },
   metricRed: { color: '#E31B23' },
   metricLabel: { color: '#78716C', fontWeight: '800', textTransform: 'uppercase', fontSize: 11 },
-  card: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: SPACING.md, borderWidth: 1, borderColor: '#E7E0D1', gap: 12 },
-  cardDark: { backgroundColor: '#111111', borderRadius: 22, padding: SPACING.md, gap: 8 },
+  card: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: spacing.md, borderWidth: 1, borderColor: '#E7E0D1', gap: 12 },
+  cardDark: { backgroundColor: '#111111', borderRadius: 22, padding: spacing.md, gap: 8 },
   cardTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
   cardTitleLight: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
   lightBody: { color: '#E7E5E4', lineHeight: 22 },
-  assignmentCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: SPACING.md, borderWidth: 1, borderColor: '#E7E0D1', gap: 10 },
+  assignmentCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: spacing.md, borderWidth: 1, borderColor: '#E7E0D1', gap: 10 },
+  offlineCard: { backgroundColor: '#FFFCF7', borderRadius: 18, padding: spacing.md, borderWidth: 1, borderColor: '#FDBA74', gap: 10 },
+  queueGroup: { gap: spacing.sm },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
   assignmentTitle: { flex: 1, fontSize: 17, fontWeight: '900', color: '#111827' },
   assignmentBody: { color: '#44403C', lineHeight: 21 },
@@ -428,18 +621,21 @@ const styles = StyleSheet.create({
   priorityText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
   statusPill: { backgroundColor: '#EEF2FF', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 },
   statusText: { color: '#3730A3', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
-  actionRow: { flexDirection: 'row', gap: SPACING.sm, marginTop: 4 },
+  offlinePill: { backgroundColor: '#FFF7ED', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: '#FDBA74' },
+  offlinePillText: { color: '#9A3412', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: 4 },
   primaryButton: { backgroundColor: '#111111', borderRadius: 14, alignItems: 'center', paddingVertical: 14, marginTop: 4 },
   primaryButtonSmall: { backgroundColor: '#111111', borderRadius: 12, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 16 },
   primaryButtonText: { color: '#FFFFFF', fontWeight: '900' },
+  buttonStack: { gap: spacing.sm, marginTop: 4 },
   secondaryButton: { borderColor: '#111111', borderWidth: 1, borderRadius: 14, alignItems: 'center', paddingVertical: 14, marginTop: 4 },
   secondaryButtonSmall: { borderColor: '#111111', borderWidth: 1, borderRadius: 12, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 16 },
   secondaryButtonText: { color: '#111111', fontWeight: '900' },
   inputLabel: { color: '#44403C', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
   input: { borderWidth: 1, borderColor: '#D6D3D1', borderRadius: 14, padding: 12, fontSize: 16, color: '#111827', backgroundColor: '#FFFCF7' },
   textArea: { minHeight: 130, textAlignVertical: 'top' },
-  captureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.sm },
-  captureAction: { width: '48%', borderRadius: 16, borderWidth: 1, borderColor: '#E7E0D1', padding: SPACING.md, backgroundColor: '#FFFCF7' },
+  captureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  captureAction: { width: '48%', borderRadius: 16, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, backgroundColor: '#FFFCF7' },
   captureLabel: { fontSize: 16, fontWeight: '900', color: '#111827' },
   captureDetail: { color: '#78716C', marginTop: 4 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
