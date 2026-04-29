@@ -13,7 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import type { Assignment, Story, User } from '@aj-now/shared';
+import type { Assignment, SafetyCheckIn, SafetyStatus, Story, User } from '@aj-now/shared';
 import { colors, spacing } from '@aj-now/shared';
 
 type ApiEnvelope<T> = { success: boolean; data?: T; error?: string };
@@ -28,17 +28,18 @@ type LocalDraft = {
   createdAt: string;
   updatedAt: string;
 };
-type TabKey = 'briefing' | 'assignments' | 'capture' | 'offline' | 'profile';
+type TabKey = 'briefing' | 'assignments' | 'capture' | 'offline' | 'safety' | 'profile';
 
 const API_BASE = 'http://localhost:3001/api';
 const LOCAL_DRAFTS_KEY = '@aj-now/local-drafts:v1';
-const DEMO_EMAIL = 'leila.hassan@aljazeera.net';
+const DEMO_EMAIL = 'demo@aljazeera.net';
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'briefing', label: 'Briefing' },
   { key: 'assignments', label: 'Assignments' },
   { key: 'capture', label: 'Capture' },
   { key: 'offline', label: 'Offline' },
+  { key: 'safety', label: 'Safety' },
   { key: 'profile', label: 'Profile' },
 ];
 
@@ -82,6 +83,11 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+  const [safetyHistory, setSafetyHistory] = useState<SafetyCheckIn[]>([]);
+  const [safetyMessage, setSafetyMessage] = useState('Checking in from current assignment location.');
+  const [safetyStatus, setSafetyStatus] = useState<SafetyStatus>('safe');
+  const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
+  const [safetyLoading, setSafetyLoading] = useState(false);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const [localDraftsLoaded, setLocalDraftsLoaded] = useState(false);
   const [syncingDraftId, setSyncingDraftId] = useState<string | null>(null);
@@ -110,13 +116,15 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({ email: DEMO_EMAIL, password: 'demo' }),
       });
-      const [assignmentData, storyData] = await Promise.all([
+      const [assignmentData, storyData, checkInData] = await Promise.all([
         api<Assignment[]>(`/assignments?userId=${login.user.id}`),
-        api<Story[]>(`/stories?authorId=${login.user.id}`),
+        api<Story[]>(`/stories?userId=${login.user.id}`),
+        api<SafetyCheckIn[]>(`/safety/history?userId=${login.user.id}`),
       ]);
       setUser(login.user);
       setAssignments(assignmentData);
       setStories(storyData);
+      setSafetyHistory(checkInData);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to load Reporter App data';
       setError(message);
@@ -247,6 +255,99 @@ export default function App() {
     }
   }
 
+  function currentReporterLocation() {
+    const assignmentLocation = activeAssignments[0]?.location || assignments[0]?.location;
+    if (assignmentLocation) {
+      return {
+        latitude: assignmentLocation.latitude,
+        longitude: assignmentLocation.longitude,
+        altitude: assignmentLocation.altitude,
+        accuracy: assignmentLocation.accuracy || 25,
+        timestamp: new Date().toISOString(),
+        placeName: assignmentLocation.placeName || 'Assignment location',
+      };
+    }
+    return {
+      latitude: 51.5072,
+      longitude: -0.1276,
+      accuracy: 50,
+      timestamp: new Date().toISOString(),
+      placeName: user?.bureau || 'Bureau location',
+    };
+  }
+
+  async function loadSafetyHistory(userId = user?.id) {
+    if (!userId) return;
+    try {
+      const checkIns = await api<SafetyCheckIn[]>(`/safety/history?userId=${userId}`);
+      setSafetyHistory(checkIns);
+    } catch (err) {
+      setSafetyNotice(err instanceof Error ? err.message : 'Unable to refresh safety history.');
+    }
+  }
+
+  async function sendSafetyCheckIn(status: SafetyStatus = safetyStatus) {
+    if (!user) {
+      Alert.alert('Profile unavailable', 'Refresh the app before sending a safety check-in.');
+      return;
+    }
+    const location = currentReporterLocation();
+    setSafetyLoading(true);
+    setSafetyNotice(null);
+    try {
+      const checkIn = await api<SafetyCheckIn>('/safety/checkin', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user.id,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          altitude: location.altitude,
+          accuracy: location.accuracy,
+          status,
+          message: safetyMessage.trim() || undefined,
+        }),
+      });
+      setSafetyHistory((current) => [checkIn, ...current]);
+      setSafetyNotice(status === 'safe' ? 'Safety check-in sent to the newsroom.' : 'Safety alert shared with the newsroom.');
+      setSafetyStatus('safe');
+    } catch (err) {
+      Alert.alert('Unable to send check-in', err instanceof Error ? err.message : 'Please try again when connected.');
+    } finally {
+      setSafetyLoading(false);
+    }
+  }
+
+  async function sendPanicAlert() {
+    if (!user) return;
+    Alert.alert('Send emergency alert?', 'This PoC will notify the backend safety desk immediately.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Send alert',
+        style: 'destructive',
+        onPress: async () => {
+          const location = currentReporterLocation();
+          setSafetyLoading(true);
+          try {
+            const checkIn = await api<SafetyCheckIn>('/safety/panic', {
+              method: 'POST',
+              body: JSON.stringify({
+                userId: user.id,
+                latitude: location.latitude,
+                longitude: location.longitude,
+              }),
+            });
+            setSafetyHistory((current) => [checkIn, ...current]);
+            setSafetyNotice('Emergency alert acknowledged by the newsroom safety desk.');
+          } catch (err) {
+            Alert.alert('Unable to send emergency alert', err instanceof Error ? err.message : 'Please try again or use emergency contacts.');
+          } finally {
+            setSafetyLoading(false);
+          }
+        },
+      },
+    ]);
+  }
+
   async function submitStory() {
     if (!user) return;
     if (!draftBody.trim() && !draftTitle.trim()) {
@@ -343,6 +444,7 @@ export default function App() {
                 <Metric label="Breaking" value={breakingAssignments.length.toString()} tone="red" />
                 <Metric label="Drafts" value={stories.length.toString()} />
                 <Metric label="Offline" value={localDrafts.length.toString()} tone={localDrafts.length > 0 ? 'red' : undefined} />
+                <Metric label="Check-ins" value={safetyHistory.length.toString()} />
               </View>
 
               <View style={styles.card}>
@@ -445,6 +547,60 @@ export default function App() {
             </View>
           )}
 
+          {activeTab === 'safety' && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Safety desk</Text>
+              <Text style={styles.subtle}>Fast check-ins for high-pressure field work. This PoC uses assignment/bureau coordinates so the workflow can be tested without device permissions.</Text>
+              {safetyNotice && <Text style={styles.noticeText}>{safetyNotice}</Text>}
+
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Send check-in</Text>
+                <Text style={styles.inputLabel}>Status</Text>
+                <View style={styles.statusRow}>
+                  {(['safe', 'alert'] as SafetyStatus[]).map((status) => (
+                    <Pressable
+                      key={status}
+                      style={[styles.statusOption, safetyStatus === status && styles.statusOptionActive]}
+                      onPress={() => setSafetyStatus(status)}
+                    >
+                      <Text style={[styles.statusOptionText, safetyStatus === status && styles.statusOptionTextActive]}>{status === 'safe' ? 'Safe' : 'Needs attention'}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Text style={styles.inputLabel}>Message</Text>
+                <TextInput
+                  value={safetyMessage}
+                  onChangeText={setSafetyMessage}
+                  style={[styles.input, styles.textAreaSmall]}
+                  placeholder="Short note for the safety desk"
+                  multiline
+                />
+                <View style={styles.buttonStack}>
+                  <Pressable style={styles.primaryButton} onPress={() => sendSafetyCheckIn()} disabled={safetyLoading}>
+                    <Text style={styles.primaryButtonText}>{safetyLoading ? 'Sending…' : 'Send check-in'}</Text>
+                  </Pressable>
+                  <Pressable style={styles.dangerButton} onPress={sendPanicAlert} disabled={safetyLoading}>
+                    <Text style={styles.dangerButtonText}>Emergency alert</Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              <View style={styles.queueGroup}>
+                <View style={styles.cardHeaderRow}>
+                  <Text style={styles.cardTitle}>Recent check-ins</Text>
+                  <Pressable onPress={() => loadSafetyHistory()} disabled={safetyLoading}>
+                    <Text style={styles.linkText}>Refresh</Text>
+                  </Pressable>
+                </View>
+                {safetyHistory.length === 0 ? (
+                  <View style={styles.card}><Text style={styles.subtle}>No safety check-ins yet.</Text></View>
+                ) : (
+                  safetyHistory.map((checkIn) => <SafetyCheckInCard key={checkIn.id} checkIn={checkIn} />)
+                )}
+              </View>
+            </View>
+          )}
+
           {activeTab === 'profile' && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Correspondent profile</Text>
@@ -456,8 +612,8 @@ export default function App() {
                 <View style={styles.divider} />
                 <Text style={styles.cardTitle}>Safety check-in</Text>
                 <Text style={styles.subtle}>Location sharing and emergency contact workflows are represented in the backend safety API.</Text>
-                <Pressable style={styles.secondaryButton}>
-                  <Text style={styles.secondaryButtonText}>Send check-in</Text>
+                <Pressable style={styles.secondaryButton} onPress={() => setActiveTab('safety')}>
+                  <Text style={styles.secondaryButtonText}>Open safety desk</Text>
                 </Pressable>
               </View>
             </View>
@@ -553,6 +709,22 @@ function LocalDraftCard({
   );
 }
 
+function SafetyCheckInCard({ checkIn }: { checkIn: SafetyCheckIn }) {
+  const isEmergency = checkIn.status === 'emergency' || checkIn.status === 'alert';
+  return (
+    <View style={[styles.card, isEmergency && styles.alertCard]}>
+      <View style={styles.cardHeaderRow}>
+        <Text style={styles.assignmentTitle}>{checkIn.status === 'safe' ? 'Safe check-in' : 'Safety alert'}</Text>
+        <View style={[styles.statusPill, isEmergency && styles.alertPill]}><Text style={styles.statusText}>{checkIn.status}</Text></View>
+      </View>
+      {checkIn.message && <Text style={styles.assignmentBody}>{checkIn.message}</Text>}
+      <Text style={styles.assignmentMeta}>
+        {formatTime(checkIn.timestamp)} · {checkIn.location.placeName || `${checkIn.location.latitude.toFixed(2)}, ${checkIn.location.longitude.toFixed(2)}`}
+      </Text>
+    </View>
+  );
+}
+
 function StoryCard({ story }: { story: Story }) {
   return (
     <View style={styles.card}>
@@ -621,6 +793,8 @@ const styles = StyleSheet.create({
   priorityText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
   statusPill: { backgroundColor: '#EEF2FF', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 },
   statusText: { color: '#3730A3', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  alertCard: { borderColor: '#F97316', backgroundColor: '#FFF7ED' },
+  alertPill: { backgroundColor: '#FED7AA' },
   offlinePill: { backgroundColor: '#FFF7ED', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: '#FDBA74' },
   offlinePillText: { color: '#9A3412', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
   actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: 4 },
@@ -628,18 +802,27 @@ const styles = StyleSheet.create({
   primaryButtonSmall: { backgroundColor: '#111111', borderRadius: 12, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 16 },
   primaryButtonText: { color: '#FFFFFF', fontWeight: '900' },
   buttonStack: { gap: spacing.sm, marginTop: 4 },
+  statusRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  statusOption: { borderRadius: 999, borderWidth: 1, borderColor: '#D6D3D1', paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#FAFAFA' },
+  statusOptionActive: { borderColor: colors.accent, backgroundColor: '#FFF7CC' },
+  statusOptionText: { color: '#57534E', fontWeight: '800' },
+  statusOptionTextActive: { color: '#111827' },
   secondaryButton: { borderColor: '#111111', borderWidth: 1, borderRadius: 14, alignItems: 'center', paddingVertical: 14, marginTop: 4 },
   secondaryButtonSmall: { borderColor: '#111111', borderWidth: 1, borderRadius: 12, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 16 },
   secondaryButtonText: { color: '#111111', fontWeight: '900' },
   inputLabel: { color: '#44403C', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
   input: { borderWidth: 1, borderColor: '#D6D3D1', borderRadius: 14, padding: 12, fontSize: 16, color: '#111827', backgroundColor: '#FFFCF7' },
   textArea: { minHeight: 130, textAlignVertical: 'top' },
+  textAreaSmall: { minHeight: 88, textAlignVertical: 'top' },
   captureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   captureAction: { width: '48%', borderRadius: 16, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, backgroundColor: '#FFFCF7' },
   captureLabel: { fontSize: 16, fontWeight: '900', color: '#111827' },
   captureDetail: { color: '#78716C', marginTop: 4 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tag: { color: '#7C2D12', backgroundColor: '#FFEDD5', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12, fontWeight: '700' },
+  dangerButton: { backgroundColor: '#B91C1C', borderRadius: 14, alignItems: 'center', paddingVertical: 14, marginTop: 4 },
+  dangerButtonText: { color: '#FFFFFF', fontWeight: '900' },
+  linkText: { color: '#9A7B00', fontWeight: '900' },
   profileName: { fontSize: 24, fontWeight: '900', color: '#111827' },
   profileMeta: { color: '#44403C', fontSize: 16, fontWeight: '700' },
   divider: { height: 1, backgroundColor: '#E7E0D1', marginVertical: 4 },

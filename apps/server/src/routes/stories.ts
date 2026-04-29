@@ -43,13 +43,17 @@ storyRoutes.post('/', async (c) => {
   const body = await c.req.json();
   const id = generateId();
 
+  const headline = body.headline || body.title || 'Untitled field draft';
+  const filedBy = body.filedBy || body.authorId || 'usr_005';
+  const slug = body.slug || headline.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `story-${Date.now()}`;
+
   db.run(`
     INSERT INTO stories (id, assignment_id, headline, slug, body, summary, tags, status, filed_by, latitude, longitude, place_name)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
-    id, body.assignmentId || null, body.headline, body.slug || body.headline.toLowerCase().replace(/\s+/g, '-'),
+    id, body.assignmentId || null, headline, slug,
     body.body || '', body.summary || null, JSON.stringify(body.tags || []),
-    body.status || 'draft', body.filedBy || 'usr_005',
+    body.status || 'draft', filedBy,
     body.location?.latitude || null, body.location?.longitude || null, body.location?.placeName || null,
   ]);
 

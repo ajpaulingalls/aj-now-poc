@@ -17,7 +17,8 @@ safetyRoutes.post('/checkin', async (c) => {
     body.status || 'safe', body.message || null,
   ]);
 
-  return c.json({ success: true, data: { id, status: body.status || 'safe', timestamp: new Date().toISOString() } }, 201);
+  const checkin = db.query('SELECT * FROM safety_checkins WHERE id = ?').get(id);
+  return c.json({ success: true, data: formatCheckIn(checkin) }, 201);
 });
 
 // Panic button
@@ -32,12 +33,30 @@ safetyRoutes.post('/panic', async (c) => {
 
   console.log('🚨 PANIC ALERT from user', body.userId, 'at', body.latitude, body.longitude);
 
-  return c.json({ success: true, data: { id, status: 'emergency', acknowledged: true } }, 201);
+  const checkin = db.query('SELECT * FROM safety_checkins WHERE id = ?').get(id);
+  return c.json({ success: true, data: formatCheckIn(checkin) }, 201);
 });
 
 // Get check-in history
 safetyRoutes.get('/history', (c) => {
   const userId = c.req.query('userId') || 'usr_005';
   const checkins = db.query('SELECT * FROM safety_checkins WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20').all(userId);
-  return c.json({ success: true, data: checkins });
+  return c.json({ success: true, data: checkins.map(formatCheckIn) });
 });
+
+function formatCheckIn(row: any) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    location: {
+      latitude: row.latitude,
+      longitude: row.longitude,
+      altitude: row.altitude || undefined,
+      accuracy: row.accuracy || undefined,
+      timestamp: row.timestamp,
+    },
+    status: row.status,
+    message: row.message || undefined,
+    timestamp: row.timestamp,
+  };
+}

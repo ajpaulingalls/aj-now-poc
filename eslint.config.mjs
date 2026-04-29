@@ -32,6 +32,10 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // Keep the MVP lint baseline gentle: these React Compiler rules are useful later,
+      // but too noisy while the app is still a single-file PoC with async bootstrapping.
+      'react-hooks/immutability': 'off',
+      'react-hooks/set-state-in-effect': 'off',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         {
