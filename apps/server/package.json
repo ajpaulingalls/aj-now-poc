@@ -4,9 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch src/index.ts",
-    "start": "bun src/index.ts"
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.3.0",
+    "@types/bun": "latest",
+    "@types/node": "latest"
   }
 }
