@@ -41,6 +41,17 @@ type SyncPushResponse = {
   total: number;
   results: Array<{ id?: string; type?: string; status: 'accepted' | 'rejected'; serverId?: string; error?: string }>;
 };
+type MediaUploadResponse = {
+  id: string;
+  storyId?: string | null;
+  type: MediaType;
+  uri: string;
+  url?: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadStatus: 'uploaded';
+};
 type TabKey = 'briefing' | 'assignments' | 'capture' | 'offline' | 'safety' | 'profile';
 
 const API_BASE = 'http://localhost:3001/api';
@@ -403,6 +414,63 @@ export default function App() {
     });
   }
 
+  function appendFormField(form: FormData, key: string, value: unknown) {
+    if (value === undefined || value === null || value === '') return;
+    form.append(key, String(value));
+  }
+
+  async function uploadMediaAttachment(attachment: MediaAttachment, storyId: string): Promise<MediaAttachment> {
+    const form = new FormData();
+    form.append('file', {
+      uri: attachment.uri,
+      name: attachment.filename,
+      type: attachment.mimeType,
+    } as unknown as Blob);
+    appendFormField(form, 'storyId', storyId);
+    appendFormField(form, 'type', attachment.type);
+    appendFormField(form, 'filename', attachment.filename);
+    appendFormField(form, 'mimeType', attachment.mimeType);
+    appendFormField(form, 'sizeBytes', attachment.sizeBytes);
+    appendFormField(form, 'durationMs', attachment.durationMs);
+    appendFormField(form, 'width', attachment.width);
+    appendFormField(form, 'height', attachment.height);
+    appendFormField(form, 'caption', attachment.caption);
+    appendFormField(form, 'capturedAt', attachment.capturedAt);
+    appendFormField(form, 'latitude', attachment.location?.latitude);
+    appendFormField(form, 'longitude', attachment.location?.longitude);
+
+    const uploaded = await api<MediaUploadResponse>('/media/upload', {
+      method: 'POST',
+      headers: {},
+      body: form,
+    });
+
+    return {
+      ...attachment,
+      id: uploaded.id || attachment.id,
+      uri: uploaded.url ? `${API_BASE}${uploaded.url}` : uploaded.uri ? `${API_BASE}${uploaded.uri}` : attachment.uri,
+      filename: uploaded.filename || attachment.filename,
+      mimeType: uploaded.mimeType || attachment.mimeType,
+      sizeBytes: uploaded.sizeBytes || attachment.sizeBytes,
+      uploadStatus: 'uploaded',
+      uploadProgress: 1,
+    };
+  }
+
+  async function uploadStoryAttachments(attachments: MediaAttachment[], storyId: string) {
+    const uploaded: MediaAttachment[] = [];
+
+    for (const attachment of attachments) {
+      if (attachment.uploadStatus === 'uploaded') {
+        uploaded.push(attachment);
+        continue;
+      }
+      uploaded.push(await uploadMediaAttachment({ ...attachment, uploadStatus: 'uploading' }, storyId));
+    }
+
+    return uploaded;
+  }
+
   async function syncLocalDraft(draft: LocalDraft) {
     if (!user) {
       Alert.alert('Profile unavailable', 'Refresh the app before syncing local drafts.');
@@ -413,11 +481,17 @@ export default function App() {
     try {
       const response = await pushSyncItems([localDraftToSyncItem(draft)]);
       const result = response.results.find((item) => item.id === draft.id);
-      if (!result || result.status !== 'accepted') {
+      if (!result || result.status !== 'accepted' || !result.serverId) {
         throw new Error(result?.error || 'Draft was not accepted by the sync endpoint.');
       }
+      const uploadedAttachments = await uploadStoryAttachments(draft.mediaAttachments, result.serverId);
       setLocalDrafts((current) => current.filter((item) => item.id !== draft.id));
-      setDraftNotice('Offline draft synced to the newsroom draft queue.');
+      const uploadedCount = uploadedAttachments.filter((attachment) => attachment.uploadStatus === 'uploaded').length;
+      setDraftNotice(
+        uploadedCount > 0
+          ? `Offline draft synced with ${uploadedCount} attachment${uploadedCount === 1 ? '' : 's'} uploaded.`
+          : 'Offline draft synced to the newsroom draft queue.'
+      );
       loadData(false);
     } catch (err) {
       setLocalDrafts((current) => current.map((item) => (item.id === draft.id ? { ...item, status: 'queued' } : item)));
@@ -790,10 +864,17 @@ export default function App() {
           status: 'draft',
         }),
       });
-      setStories((current) => [story, ...current]);
+      const uploadedAttachments = await uploadStoryAttachments(mediaAttachments, story.id);
+      setStories((current) => [{ ...story, media: uploadedAttachments }, ...current]);
       setDraftTitle('');
       setDraftBody('');
-      setDraftNotice('Draft saved to the newsroom queue.');
+      setMediaAttachments([]);
+      const uploadedCount = uploadedAttachments.filter((attachment) => attachment.uploadStatus === 'uploaded').length;
+      setDraftNotice(
+        uploadedCount > 0
+          ? `Draft saved with ${uploadedCount} attachment${uploadedCount === 1 ? '' : 's'} uploaded.`
+          : 'Draft saved to the newsroom queue.'
+      );
       setActiveTab('offline');
     } catch (err) {
       await saveOfflineDraft(false);
@@ -1069,7 +1150,7 @@ export default function App() {
                           <View style={styles.attachmentMeta}>
                             <Text style={styles.attachmentName}>{attachment.filename}</Text>
                             <Text style={styles.attachmentDetails}>
-                              {mediaTypeLabels[attachment.type]} · {formatBytes(attachment.sizeBytes)} · ready for sync
+                              {mediaTypeLabels[attachment.type]} · {formatBytes(attachment.sizeBytes)} · {attachment.uploadStatus === 'uploaded' ? 'uploaded' : attachment.uploadStatus === 'uploading' ? 'uploading…' : 'ready for upload'}
                             </Text>
                           </View>
                           <Pressable style={styles.removeAttachmentButton} onPress={() => removeMediaAttachment(attachment.id)}>

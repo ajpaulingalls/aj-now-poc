@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serveStatic } from 'hono/bun';
+import path from 'path';
 import { logger } from 'hono/logger';
 import { authRoutes } from './routes/auth';
 import { assignmentRoutes } from './routes/assignments';
@@ -11,10 +13,15 @@ import { aiRoutes } from './routes/ai';
 import { seedDatabase } from './db/seed';
 
 const app = new Hono();
+const uploadRoot = path.join(import.meta.dir, '../uploads');
 
 // Middleware
 app.use('*', cors());
 app.use('*', logger());
+app.use('/api/media/uploads/*', serveStatic({
+  root: uploadRoot,
+  rewriteRequestPath: (requestPath) => requestPath.replace(/^\/api\/media\/uploads/, ''),
+}));
 
 // Health check
 app.get('/', (c) => c.json({
