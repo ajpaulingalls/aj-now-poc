@@ -13,7 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import type { Assignment, SafetyCheckIn, SafetyStatus, Story, User } from '@aj-now/shared';
+import type { Assignment, MediaAttachment, MediaType, SafetyCheckIn, SafetyStatus, Story, User } from '@aj-now/shared';
 import { colors, spacing } from '@aj-now/shared';
 
 type ApiEnvelope<T> = { success: boolean; data?: T; error?: string };
@@ -24,6 +24,7 @@ type LocalDraft = {
   assignmentId?: string;
   summary?: string;
   tags: string[];
+  mediaAttachments: MediaAttachment[];
   status: 'queued' | 'syncing';
   createdAt: string;
   updatedAt: string;
@@ -59,8 +60,53 @@ const priorityColor: Record<string, string> = {
   feature: '#7C3AED',
 };
 
+const mediaTypeLabels: Record<MediaType, string> = {
+  photo: 'Photo',
+  video: 'Video',
+  audio: 'Audio',
+  document: 'Document',
+};
+
+const mediaTypeMimeDefaults: Record<MediaType, string> = {
+  photo: 'image/jpeg',
+  video: 'video/mp4',
+  audio: 'audio/m4a',
+  document: 'application/pdf',
+};
+
+const mediaTypeExtensions: Record<MediaType, string> = {
+  photo: 'jpg',
+  video: 'mp4',
+  audio: 'm4a',
+  document: 'pdf',
+};
+
 function makeLocalDraftId() {
   return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeLocalMediaAttachment(type: MediaType): MediaAttachment {
+  const id = `media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const extension = mediaTypeExtensions[type];
+
+  return {
+    id,
+    type,
+    uri: `local://capture/${id}.${extension}`,
+    filename: `${type}-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
+    mimeType: mediaTypeMimeDefaults[type],
+    sizeBytes: 0,
+    caption: `${mediaTypeLabels[type]} from field capture`,
+    capturedAt: new Date().toISOString(),
+    uploadStatus: 'pending',
+  };
+}
+
+function formatBytes(sizeBytes?: number) {
+  if (!sizeBytes) return 'Size pending';
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(value?: string) {
@@ -115,6 +161,7 @@ export default function App() {
   const [draftBody, setDraftBody] = useState(
     'Early interviews suggest residents are watching regional inflation and fuel prices closely while government officials prepare a new policy briefing.'
   );
+  const [mediaAttachments, setMediaAttachments] = useState<MediaAttachment[]>([]);
 
   const breakingAssignments = useMemo(
     () => assignments.filter((assignment) => assignment.priority === 'breaking' || assignment.priority === 'urgent'),
@@ -225,6 +272,7 @@ export default function App() {
       body: draftBody.trim(),
       assignmentId: selectedAssignmentId ?? undefined,
       tags: ['offline', 'field-report'],
+      mediaAttachments,
       status: 'queued',
       createdAt: now,
       updatedAt: now,
@@ -376,6 +424,16 @@ export default function App() {
     setFocusedAssignmentId(assignment.id);
     setSelectedAssignmentId(assignment.id);
     setActiveTab('assignments');
+  }
+
+  function addMediaAttachment(type: MediaType) {
+    setMediaAttachments((current) => [makeLocalMediaAttachment(type), ...current]);
+    setDraftNotice(`${mediaTypeLabels[type]} attachment added to this draft.`);
+  }
+
+  function removeMediaAttachment(id: string) {
+    setMediaAttachments((current) => current.filter((attachment) => attachment.id !== id));
+    setDraftNotice('Media attachment removed from this draft.');
   }
 
   function fileAgainstAssignment(assignment: Assignment) {

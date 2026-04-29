@@ -11,6 +11,8 @@
 #   labeeb-install --help
 set -e
 
+export GIT_DISCOVERY_ACROSS_FILESYSTEM="${GIT_DISCOVERY_ACROSS_FILESYSTEM:-1}"
+
 CACHE_ROOT="${LABEEB_NM_CACHE:-/var/cache/labeeb/nm}"
 proj="$(pwd)"
 
