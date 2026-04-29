@@ -28,10 +28,19 @@ type LocalDraft = {
   createdAt: string;
   updatedAt: string;
 };
+type LocalSafetyCheckIn = Omit<SafetyCheckIn, 'status'> & { status: SafetyStatus | 'syncing' };
+type SyncPushResponse = {
+  processed: number;
+  accepted: number;
+  rejected: number;
+  total: number;
+  results: Array<{ id?: string; type?: string; status: 'accepted' | 'rejected'; serverId?: string; error?: string }>;
+};
 type TabKey = 'briefing' | 'assignments' | 'capture' | 'offline' | 'safety' | 'profile';
 
 const API_BASE = 'http://localhost:3001/api';
 const LOCAL_DRAFTS_KEY = '@aj-now/local-drafts:v1';
+const LOCAL_SAFETY_QUEUE_KEY = '@aj-now/local-safety-checkins:v1';
 const DEMO_EMAIL = 'demo@aljazeera.net';
 
 const tabs: Array<{ key: TabKey; label: string }> = [
@@ -84,6 +93,8 @@ export default function App() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [safetyHistory, setSafetyHistory] = useState<SafetyCheckIn[]>([]);
+  const [localSafetyCheckIns, setLocalSafetyCheckIns] = useState<LocalSafetyCheckIn[]>([]);
+  const [localSafetyLoaded, setLocalSafetyLoaded] = useState(false);
   const [safetyMessage, setSafetyMessage] = useState('Checking in from current assignment location.');
   const [safetyStatus, setSafetyStatus] = useState<SafetyStatus>('safe');
   const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
@@ -150,6 +161,7 @@ export default function App() {
   useEffect(() => {
     loadData();
     loadLocalDrafts();
+    loadLocalSafetyCheckIns();
   }, []);
 
   useEffect(() => {
@@ -158,6 +170,13 @@ export default function App() {
       // Local persistence failure should not block capture; the UI still keeps in-memory drafts.
     });
   }, [localDrafts, localDraftsLoaded]);
+
+  useEffect(() => {
+    if (!localSafetyLoaded) return;
+    AsyncStorage.setItem(LOCAL_SAFETY_QUEUE_KEY, JSON.stringify(localSafetyCheckIns)).catch(() => {
+      // Local persistence failure should not block check-ins; the UI still keeps in-memory items.
+    });
+  }, [localSafetyCheckIns, localSafetyLoaded]);
 
   async function refresh() {
     setRefreshing(true);
@@ -173,6 +192,18 @@ export default function App() {
       setDraftNotice('Unable to restore saved offline drafts on this device.');
     } finally {
       setLocalDraftsLoaded(true);
+    }
+  }
+
+  async function loadLocalSafetyCheckIns() {
+    try {
+      const raw = await AsyncStorage.getItem(LOCAL_SAFETY_QUEUE_KEY);
+      const parsed = raw ? (JSON.parse(raw) as LocalSafetyCheckIn[]) : [];
+      setLocalSafetyCheckIns(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setSafetyNotice('Unable to restore saved offline safety check-ins on this device.');
+    } finally {
+      setLocalSafetyLoaded(true);
     }
   }
 
@@ -209,6 +240,41 @@ export default function App() {
     return draft;
   }
 
+  function localDraftToSyncItem(draft: LocalDraft) {
+    return {
+      id: draft.id,
+      type: 'draft',
+      payload: {
+        ...draft,
+        authorId: user?.id,
+        language: 'en',
+        status: 'draft',
+      },
+    };
+  }
+
+  function localSafetyCheckInToSyncItem(checkIn: LocalSafetyCheckIn) {
+    return {
+      id: checkIn.id,
+      type: 'safety_checkin',
+      payload: {
+        id: checkIn.id,
+        userId: checkIn.userId,
+        location: checkIn.location,
+        status: checkIn.status === 'syncing' ? 'alert' : checkIn.status,
+        message: checkIn.message,
+        timestamp: checkIn.timestamp,
+      },
+    };
+  }
+
+  async function pushSyncItems(items: Array<ReturnType<typeof localDraftToSyncItem> | ReturnType<typeof localSafetyCheckInToSyncItem>>) {
+    return api<SyncPushResponse>('/sync/push', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+  }
+
   async function syncLocalDraft(draft: LocalDraft) {
     if (!user) {
       Alert.alert('Profile unavailable', 'Refresh the app before syncing local drafts.');
@@ -217,32 +283,68 @@ export default function App() {
     setSyncingDraftId(draft.id);
     setLocalDrafts((current) => current.map((item) => (item.id === draft.id ? { ...item, status: 'syncing' } : item)));
     try {
-      const summary = await api<{ summary: string; tags: string[]; suggestedTitle: string }>('/ai/summarize', {
-        method: 'POST',
-        body: JSON.stringify({ title: draft.title, text: draft.body }),
-      }).catch(() => ({ summary: draft.body.slice(0, 160), tags: draft.tags, suggestedTitle: draft.title }));
-
-      const story = await api<Story>('/stories', {
-        method: 'POST',
-        body: JSON.stringify({
-          assignmentId: draft.assignmentId || activeAssignments[0]?.id,
-          authorId: user.id,
-          title: summary.suggestedTitle || draft.title,
-          body: draft.body,
-          summary: summary.summary,
-          tags: summary.tags,
-          language: 'en',
-          status: 'draft',
-        }),
-      });
-      setStories((current) => [story, ...current]);
+      const response = await pushSyncItems([localDraftToSyncItem(draft)]);
+      const result = response.results.find((item) => item.id === draft.id);
+      if (!result || result.status !== 'accepted') {
+        throw new Error(result?.error || 'Draft was not accepted by the sync endpoint.');
+      }
       setLocalDrafts((current) => current.filter((item) => item.id !== draft.id));
       setDraftNotice('Offline draft synced to the newsroom draft queue.');
+      loadData(false);
     } catch (err) {
       setLocalDrafts((current) => current.map((item) => (item.id === draft.id ? { ...item, status: 'queued' } : item)));
       Alert.alert('Unable to sync draft', err instanceof Error ? err.message : 'Draft remains safely queued offline.');
     } finally {
       setSyncingDraftId(null);
+    }
+  }
+
+  async function syncQueuedItems() {
+    if (!user) {
+      Alert.alert('Profile unavailable', 'Refresh the app before syncing queued items.');
+      return;
+    }
+
+    const queuedDrafts = localDrafts.filter((item) => item.status === 'queued');
+    const queuedSafetyCheckIns = localSafetyCheckIns.filter((item) => item.status !== 'syncing');
+
+    if (queuedDrafts.length === 0 && queuedSafetyCheckIns.length === 0) {
+      setDraftNotice('No offline items are waiting to sync.');
+      return;
+    }
+
+    setLocalDrafts((current) => current.map((item) => (item.status === 'queued' ? { ...item, status: 'syncing' } : item)));
+    setLocalSafetyCheckIns((current) => current.map((item) => ({ ...item, status: 'syncing' })));
+
+    try {
+      const response = await pushSyncItems([
+        ...queuedDrafts.map(localDraftToSyncItem),
+        ...queuedSafetyCheckIns.map(localSafetyCheckInToSyncItem),
+      ]);
+      const acceptedIds = new Set(response.results.filter((item) => item.status === 'accepted').map((item) => item.id));
+      setLocalDrafts((current) =>
+        current
+          .filter((item) => !acceptedIds.has(item.id))
+          .map((item) => (item.status === 'syncing' ? { ...item, status: 'queued' } : item))
+      );
+      setLocalSafetyCheckIns((current) =>
+        current
+          .filter((item) => !acceptedIds.has(item.id))
+          .map((item) => (item.status === 'syncing' ? { ...item, status: 'alert' } : item))
+      );
+      setDraftNotice(`Synced ${response.accepted} offline item${response.accepted === 1 ? '' : 's'} to the newsroom.`);
+      if (response.rejected > 0) {
+        setSafetyNotice(`${response.rejected} offline item${response.rejected === 1 ? '' : 's'} still need attention.`);
+      } else {
+        setSafetyNotice('Offline safety check-ins synced to the safety desk.');
+      }
+      loadData(false);
+    } catch (err) {
+      setLocalDrafts((current) => current.map((item) => (item.status === 'syncing' ? { ...item, status: 'queued' } : item)));
+      setLocalSafetyCheckIns((current) =>
+        current.map((item) => (item.status === 'syncing' ? { ...item, status: 'alert' } : item))
+      );
+      Alert.alert('Unable to sync offline items', err instanceof Error ? err.message : 'Items remain safely queued offline.');
     }
   }
 
@@ -309,6 +411,15 @@ export default function App() {
       return;
     }
     const location = currentReporterLocation();
+    const queuedCheckIn: LocalSafetyCheckIn = {
+      id: `local_safe_${Date.now()}`,
+      userId: user.id,
+      location,
+      status,
+      message: safetyMessage.trim() || undefined,
+      timestamp: new Date().toISOString(),
+    };
+
     setSafetyLoading(true);
     setSafetyNotice(null);
     try {
@@ -327,8 +438,12 @@ export default function App() {
       setSafetyHistory((current) => [checkIn, ...current]);
       setSafetyNotice(status === 'safe' ? 'Safety check-in sent to the newsroom.' : 'Safety alert shared with the newsroom.');
       setSafetyStatus('safe');
-    } catch (err) {
-      Alert.alert('Unable to send check-in', err instanceof Error ? err.message : 'Please try again when connected.');
+      setSafetyMessage('');
+    } catch {
+      setLocalSafetyCheckIns((current) => [queuedCheckIn, ...current]);
+      setSafetyNotice('Connection unavailable. Safety check-in saved offline and will sync later.');
+      setSafetyStatus('safe');
+      setSafetyMessage('');
     } finally {
       setSafetyLoading(false);
     }
@@ -588,32 +703,74 @@ export default function App() {
           {activeTab === 'offline' && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Offline queue</Text>
-              <Text style={styles.subtle}>Drafts and captured media prepared for sync when connectivity returns.</Text>
+              <Text style={styles.subtle}>Drafts, captured media, and safety check-ins prepared for sync when connectivity returns.</Text>
               {draftNotice && <Text style={styles.noticeText}>{draftNotice}</Text>}
+              {safetyNotice && <Text style={styles.noticeText}>{safetyNotice}</Text>}
+              {(localDrafts.length > 0 || localSafetyCheckIns.length > 0) && (
+                <Pressable style={styles.primaryButton} onPress={syncQueuedItems}>
+                  <Text style={styles.primaryButtonText}>Sync all queued items</Text>
+                </Pressable>
+              )}
 
-              {localDrafts.length > 0 && (
+              {localDrafts.length === 0 && localSafetyCheckIns.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.subtle}>No local offline items yet.</Text>
+                </View>
+              ) : null}
+
+              {localDrafts.length > 0 ? (
                 <View style={styles.queueGroup}>
-                  <Text style={styles.cardTitle}>Pending on this device</Text>
+                  <Text style={styles.cardTitle}>Queued drafts</Text>
                   {localDrafts.map((draft) => (
-                    <LocalDraftCard
-                      key={draft.id}
-                      draft={draft}
-                      syncing={syncingDraftId === draft.id}
-                      onSync={() => syncLocalDraft(draft)}
-                      onDiscard={() => discardLocalDraft(draft)}
-                    />
+                    <View key={draft.id} style={styles.card}>
+                      <View style={styles.cardHeaderRow}>
+                        <View>
+                          <Text style={styles.cardTitle}>{draft.title}</Text>
+                          <Text style={styles.assignmentMeta}>
+                            {draft.status} · {new Date(draft.updatedAt).toLocaleString()}
+                          </Text>
+                          <Text style={styles.assignmentMeta}>
+                            {draft.assignmentId
+                              ? `Linked to ${assignments.find((assignment) => assignment.id === draft.assignmentId)?.title || 'assignment'}`
+                              : 'No assignment link'}
+                          </Text>
+                        </View>
+                        <View style={styles.actionRow}>
+                          <Pressable style={styles.secondaryButton} onPress={() => syncLocalDraft(draft)} disabled={syncingDraftId === draft.id}>
+                            <Text style={styles.secondaryButtonText}>{syncingDraftId === draft.id ? 'Syncing…' : 'Sync'}</Text>
+                          </Pressable>
+                          <Pressable style={styles.dangerButton} onPress={() => discardLocalDraft(draft)} disabled={syncingDraftId === draft.id}>
+                            <Text style={styles.dangerButtonText}>Discard</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                      <Text style={styles.assignmentBody} numberOfLines={3}>
+                        {draft.body}
+                      </Text>
+                    </View>
                   ))}
                 </View>
-              )}
+              ) : null}
 
-              {stories.length === 0 && localDrafts.length === 0 ? (
-                <View style={styles.card}><Text style={styles.subtle}>No local drafts yet.</Text></View>
-              ) : (
+              {localSafetyCheckIns.length > 0 ? (
                 <View style={styles.queueGroup}>
-                  <Text style={styles.cardTitle}>Newsroom drafts</Text>
-                  {stories.map((story) => <StoryCard key={story.id} story={story} />)}
+                  <Text style={styles.cardTitle}>Queued safety check-ins</Text>
+                  {localSafetyCheckIns.map((checkIn) => (
+                    <View key={checkIn.id} style={styles.card}>
+                      <View style={styles.cardHeaderRow}>
+                        <View>
+                          <Text style={styles.cardTitle}>
+                            {checkIn.status === 'syncing' ? 'Syncing' : checkIn.status === 'safe' ? 'Safe' : 'Needs attention'}
+                          </Text>
+                          <Text style={styles.assignmentMeta}>{new Date(checkIn.timestamp).toLocaleString()}</Text>
+                        </View>
+                        <Text style={styles.badge}>Offline</Text>
+                      </View>
+                      <Text style={styles.assignmentBody}>{checkIn.message || 'No message provided.'}</Text>
+                    </View>
+                  ))}
                 </View>
-              )}
+              ) : null}
             </View>
           )}
 
@@ -654,6 +811,26 @@ export default function App() {
                   </Pressable>
                 </View>
               </View>
+
+              {localSafetyCheckIns.length > 0 ? (
+                <View style={styles.queueGroup}>
+                  <Text style={styles.sectionTitle}>Queued offline safety check-ins</Text>
+                  {localSafetyCheckIns.map((checkIn) => (
+                    <View key={checkIn.id} style={styles.card}>
+                      <View style={styles.cardHeaderRow}>
+                        <View>
+                          <Text style={styles.cardTitle}>
+                            {checkIn.status === 'syncing' ? 'Syncing' : checkIn.status === 'safe' ? 'Safe' : 'Needs attention'}
+                          </Text>
+                          <Text style={styles.assignmentMeta}>{new Date(checkIn.timestamp).toLocaleString()}</Text>
+                        </View>
+                        <Text style={styles.badge}>Offline</Text>
+                      </View>
+                      <Text style={styles.assignmentBody}>{checkIn.message || 'No message provided.'}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
 
               <View style={styles.queueGroup}>
                 <View style={styles.cardHeaderRow}>
@@ -747,37 +924,6 @@ function CaptureAction({ label, detail }: { label: string; detail: string }) {
   );
 }
 
-function LocalDraftCard({
-  draft,
-  syncing,
-  onSync,
-  onDiscard,
-}: {
-  draft: LocalDraft;
-  syncing: boolean;
-  onSync: () => void;
-  onDiscard: () => void;
-}) {
-  return (
-    <View style={styles.offlineCard}>
-      <View style={styles.cardHeaderRow}>
-        <Text style={styles.assignmentTitle}>{draft.title}</Text>
-        <View style={styles.offlinePill}><Text style={styles.offlinePillText}>{draft.status}</Text></View>
-      </View>
-      <Text style={styles.assignmentBody}>{draft.summary || draft.body.slice(0, 180)}</Text>
-      <Text style={styles.assignmentMeta}>Saved {formatTime(draft.updatedAt)} · Stored on device</Text>
-      <View style={styles.tagRow}>{draft.tags.slice(0, 4).map((tag) => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
-      <View style={styles.actionRow}>
-        <Pressable style={styles.primaryButtonSmall} onPress={onSync} disabled={syncing}>
-          <Text style={styles.primaryButtonText}>{syncing ? 'Syncing…' : 'Sync now'}</Text>
-        </Pressable>
-        <Pressable style={styles.secondaryButtonSmall} onPress={onDiscard} disabled={syncing}>
-          <Text style={styles.secondaryButtonText}>Discard</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
 
 function SafetyCheckInCard({ checkIn }: { checkIn: SafetyCheckIn }) {
   const isEmergency = checkIn.status === 'emergency' || checkIn.status === 'alert';
@@ -795,19 +941,6 @@ function SafetyCheckInCard({ checkIn }: { checkIn: SafetyCheckIn }) {
   );
 }
 
-function StoryCard({ story }: { story: Story }) {
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardHeaderRow}>
-        <Text style={styles.assignmentTitle}>{story.headline}</Text>
-        <View style={styles.statusPill}><Text style={styles.statusText}>{story.status}</Text></View>
-      </View>
-      <Text style={styles.assignmentBody}>{story.summary || story.body?.slice(0, 180)}</Text>
-      <Text style={styles.assignmentMeta}>Updated {formatTime(story.updatedAt)} · EN</Text>
-      <View style={styles.tagRow}>{story.tags?.slice(0, 4).map((tag) => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
-    </View>
-  );
-}
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#050505' },
