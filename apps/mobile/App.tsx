@@ -73,6 +73,11 @@ function formatTime(value?: string) {
   }).format(new Date(value));
 }
 
+function formatAssignmentLocation(assignment: Assignment) {
+  if (!assignment.location) return 'Not specified';
+  return assignment.location.placeName || `${assignment.location.latitude.toFixed(2)}, ${assignment.location.longitude.toFixed(2)}`;
+}
+
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
@@ -104,6 +109,7 @@ export default function App() {
   const [syncingDraftId, setSyncingDraftId] = useState<string | null>(null);
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const [focusedAssignmentId, setFocusedAssignmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('Market reaction from Doha');
   const [draftBody, setDraftBody] = useState(
@@ -123,6 +129,10 @@ export default function App() {
   const selectedAssignment = useMemo(
     () => assignments.find((assignment) => assignment.id === selectedAssignmentId),
     [assignments, selectedAssignmentId]
+  );
+  const focusedAssignment = useMemo(
+    () => assignments.find((assignment) => assignment.id === focusedAssignmentId),
+    [assignments, focusedAssignmentId]
   );
 
   async function loadData(showSpinner = true) {
@@ -360,6 +370,18 @@ export default function App() {
         },
       },
     ]);
+  }
+
+  function openAssignmentDetail(assignment: Assignment) {
+    setFocusedAssignmentId(assignment.id);
+    setSelectedAssignmentId(assignment.id);
+    setActiveTab('assignments');
+  }
+
+  function fileAgainstAssignment(assignment: Assignment) {
+    setSelectedAssignmentId(assignment.id);
+    setFocusedAssignmentId(assignment.id);
+    setActiveTab('capture');
   }
 
   async function updateAssignment(assignment: Assignment, status: Assignment['status']) {
@@ -605,10 +627,54 @@ export default function App() {
                 <AssignmentCard
                   key={assignment.id}
                   assignment={assignment}
+                  isFocused={assignment.id === focusedAssignmentId}
                   onAccept={() => updateAssignment(assignment, 'accepted')}
                   onStart={() => updateAssignment(assignment, 'in_progress')}
+                  onView={() => openAssignmentDetail(assignment)}
                 />
               ))}
+              {focusedAssignment && (
+                <View style={styles.detailCard}>
+                  <View style={styles.cardHeaderRow}>
+                    <Text style={styles.assignmentTitle}>Assignment detail</Text>
+                    <View style={[styles.statusPill, styles.assignmentStatusPill]}>
+                      <Text style={styles.statusText}>{focusedAssignment.status.replace('_', ' ')}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.cardTitle}>{focusedAssignment.title}</Text>
+                  <Text style={styles.assignmentBody}>{focusedAssignment.description}</Text>
+                  <View style={styles.detailGrid}>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.detailLabel}>Bureau</Text>
+                      <Text style={styles.detailValue}>{focusedAssignment.bureau}</Text>
+                    </View>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.detailLabel}>Priority</Text>
+                      <Text style={styles.detailValue}>{focusedAssignment.priority.toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.detailLabel}>Due</Text>
+                      <Text style={styles.detailValue}>{formatTime(focusedAssignment.deadline)}</Text>
+                    </View>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.detailLabel}>Location</Text>
+                      <Text style={styles.detailValue}>{formatAssignmentLocation(focusedAssignment)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.assignmentMeta}>Last updated {formatTime(focusedAssignment.updatedAt)}</Text>
+                  <View style={styles.actionRow}>
+                    <Pressable style={styles.secondaryButtonSmall} onPress={() => updateAssignment(focusedAssignment, 'accepted')}>
+                      <Text style={styles.secondaryButtonText}>Accept</Text>
+                    </Pressable>
+                    <Pressable style={styles.primaryButtonSmall} onPress={() => updateAssignment(focusedAssignment, 'in_progress')}>
+                      <Text style={styles.primaryButtonText}>Start</Text>
+                    </Pressable>
+                    <Pressable style={styles.primaryButtonSmall} onPress={() => fileAgainstAssignment(focusedAssignment)}>
+                      <Text style={styles.primaryButtonText}>File story</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
             </View>
           )}
 
@@ -631,6 +697,7 @@ export default function App() {
                           key={assignment.id}
                           style={[styles.assignmentOption, isSelected && styles.assignmentOptionSelected]}
                           onPress={() => setSelectedAssignmentId(assignment.id)}
+                          onLongPress={() => openAssignmentDetail(assignment)}
                         >
                           <View style={{ flex: 1 }}>
                             <Text style={[styles.assignmentOptionTitle, isSelected && styles.assignmentOptionTitleSelected]}>
@@ -640,9 +707,14 @@ export default function App() {
                               {assignment.bureau} • {assignment.priority.toUpperCase()} • due {formatTime(assignment.deadline ?? assignment.updatedAt)}
                             </Text>
                           </View>
-                          <Text style={[styles.assignmentOptionCheck, isSelected && styles.assignmentOptionCheckSelected]}>
-                            {isSelected ? 'Selected' : 'Select'}
-                          </Text>
+                          <View style={styles.assignmentOptionActions}>
+                            <Text style={[styles.assignmentOptionCheck, isSelected && styles.assignmentOptionCheckSelected]}>
+                              {isSelected ? 'Selected' : 'Select'}
+                            </Text>
+                            <Pressable style={styles.inlineLinkButton} onPress={() => openAssignmentDetail(assignment)}>
+                              <Text style={styles.inlineLinkText}>Details</Text>
+                            </Pressable>
+                          </View>
                         </Pressable>
                       );
                     })}
@@ -883,16 +955,20 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: '
 function AssignmentCard({
   assignment,
   compact,
+  isFocused,
   onAccept,
   onStart,
+  onView,
 }: {
   assignment: Assignment;
   compact?: boolean;
+  isFocused?: boolean;
   onAccept?: () => void;
   onStart?: () => void;
+  onView?: () => void;
 }) {
   return (
-    <View style={styles.assignmentCard}>
+    <View style={[styles.assignmentCard, isFocused && styles.assignmentCardFocused]}>
       <View style={styles.cardHeaderRow}>
         <Text style={styles.assignmentTitle}>{assignment.title}</Text>
         <View style={[styles.priorityPill, { backgroundColor: priorityColor[assignment.priority] || '#64748B' }]}>
@@ -903,6 +979,9 @@ function AssignmentCard({
       <Text style={styles.assignmentMeta}>Due {formatTime(assignment.deadline)} · {assignment.bureau}</Text>
       {!compact && (
         <View style={styles.actionRow}>
+          <Pressable style={styles.secondaryButtonSmall} onPress={onView}>
+            <Text style={styles.secondaryButtonText}>Details</Text>
+          </Pressable>
           <Pressable style={styles.secondaryButtonSmall} onPress={onAccept}>
             <Text style={styles.secondaryButtonText}>Accept</Text>
           </Pressable>
@@ -1049,11 +1128,21 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: spacing.sm,
   },
+  assignmentOptionActions: { alignItems: 'flex-end', gap: 6 },
+  inlineLinkButton: { paddingHorizontal: 4, paddingVertical: 2 },
+  inlineLinkText: { color: colors.brand, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  detailCard: { backgroundColor: '#FFFCF7', borderRadius: 22, padding: spacing.md, borderWidth: 1, borderColor: colors.brand, gap: 12 },
+  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  detailItem: { flexBasis: '47%', flexGrow: 1, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.sm },
+  detailLabel: { color: colors.gray600, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  detailValue: { color: colors.gray900, fontSize: 14, fontWeight: '800', marginTop: 3 },
+  assignmentStatusPill: { backgroundColor: colors.brandLight },
   cardDark: { backgroundColor: '#111111', borderRadius: 22, padding: spacing.md, gap: 8 },
   cardTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
   cardTitleLight: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
   lightBody: { color: '#E7E5E4', lineHeight: 22 },
   assignmentCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: spacing.md, borderWidth: 1, borderColor: '#E7E0D1', gap: 10 },
+  assignmentCardFocused: { borderColor: colors.brand, borderWidth: 2, backgroundColor: '#FFFCF7' },
   offlineCard: { backgroundColor: '#FFFCF7', borderRadius: 18, padding: spacing.md, borderWidth: 1, borderColor: '#FDBA74', gap: 10 },
   queueGroup: { gap: spacing.sm },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
