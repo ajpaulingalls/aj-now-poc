@@ -529,7 +529,7 @@ export default function App() {
     }
   }
 
-  async function addLibraryMediaAttachment(type: Exclude<MediaType, 'audio'>) {
+  async function addLibraryMediaAttachment(type: Extract<MediaType, 'photo' | 'video'>) {
     if (isCapturingMedia) return;
 
     setIsCapturingMedia(type);
@@ -545,9 +545,7 @@ export default function App() {
         return;
       }
 
-      const attachment = makePickerMediaAttachment(type === 'document' ? 'photo' : type, result.assets[0]);
-      const normalizedAttachment = type === 'document' ? { ...attachment, type: 'document' as const, mimeType: result.assets[0].mimeType ?? mediaTypeMimeDefaults.document } : attachment;
-      setMediaAttachments((current) => [normalizedAttachment, ...current]);
+      setMediaAttachments((current) => [makePickerMediaAttachment(type, result.assets[0]), ...current]);
       setDraftNotice(`${mediaTypeLabels[type]} selected and attached to this draft.`);
     } catch (error) {
       console.error(`Failed to select ${type}`, error);
@@ -623,7 +621,8 @@ export default function App() {
       return;
     }
 
-    await addLibraryMediaAttachment('document');
+    Alert.alert('Document picker next', 'Photo, video, and audio capture are live now. File/document picking needs the Expo document picker module in the next increment.');
+    setDraftNotice('Document picker is queued for the next media increment.');
   }
 
   function removeMediaAttachment(id: string) {
@@ -1032,7 +1031,7 @@ export default function App() {
                             ? 'Launch video recorder'
                             : type === 'audio'
                               ? 'Use microphone'
-                              : 'Choose from library'}
+                              : 'Picker next'}
                       </Text>
                     </Pressable>
                   ))}
