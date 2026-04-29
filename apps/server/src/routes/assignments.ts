@@ -27,6 +27,55 @@ assignmentRoutes.get('/', (c) => {
   });
 });
 
+
+// Create assignment (editor/admin)
+assignmentRoutes.post('/', async (c) => {
+  const body = await c.req.json();
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const title = String(body.title || '').trim();
+  const description = String(body.description || '').trim();
+
+  if (!title || !description) {
+    return c.json({ success: false, error: 'title and description are required' }, 400);
+  }
+
+  const slug = String(body.slug || title)
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || id;
+
+  const tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : JSON.stringify([]);
+
+  db.query(`
+    INSERT INTO assignments (
+      id, title, slug, description, priority, status, assigned_to, assigned_by, bureau,
+      latitude, longitude, place_name, deadline, tags, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    title,
+    slug,
+    description,
+    body.priority || 'standard',
+    body.status || 'assigned',
+    body.assignedTo || body.assigned_to || null,
+    body.assignedBy || body.assigned_by || 'usr_002',
+    body.bureau || 'Doha',
+    body.latitude ?? null,
+    body.longitude ?? null,
+    body.placeName || body.place_name || null,
+    body.deadline || null,
+    tags,
+    now,
+    now
+  );
+
+  const assignment = db.query('SELECT * FROM assignments WHERE id = ?').get(id);
+  return c.json({ success: true, data: formatAssignment(assignment) }, 201);
+});
+
 // Get single assignment
 assignmentRoutes.get('/:id', (c) => {
   const assignment = db.query('SELECT * FROM assignments WHERE id = ?').get(c.req.param('id'));

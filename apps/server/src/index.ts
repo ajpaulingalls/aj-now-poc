@@ -9,6 +9,7 @@ import { storyRoutes } from './routes/stories';
 import { mediaRoutes } from './routes/media';
 import { safetyRoutes } from './routes/safety';
 import { syncRoutes } from './routes/sync';
+import { adminRoutes } from './routes/admin';
 import { aiRoutes } from './routes/ai';
 import { seedDatabase } from './db/seed';
 
@@ -38,6 +39,7 @@ app.route('/api/stories', storyRoutes);
 app.route('/api/media', mediaRoutes);
 app.route('/api/safety', safetyRoutes);
 app.route('/api/sync', syncRoutes);
+app.route('/admin', adminRoutes);
 app.route('/api/ai', aiRoutes);
 
 // Seed on first run
