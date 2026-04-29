@@ -23,10 +23,21 @@ resolve_bun() {
   printf '%s\n' "$bun_bin"
 }
 
+export_bun_path() {
+  local bun_bin="$1"
+  if [[ -n "$bun_bin" ]]; then
+    # Make Bun visible to child shell scripts invoked by `bun run`, not just
+    # this wrapper's final exec. Fresh containers often have Bun installed
+    # under ~/.bun/bin without that directory on PATH.
+    export PATH="$(dirname "$bun_bin"):$PATH"
+  fi
+}
+
 ensure_bun() {
   local bun_bin
   bun_bin="$(resolve_bun)"
   if [[ -n "$bun_bin" ]]; then
+    export_bun_path "$bun_bin"
     printf '%s\n' "$bun_bin"
     return 0
   fi
@@ -43,6 +54,7 @@ ensure_bun() {
     echo "[labeeb-install] ERROR: Bun install completed, but bun was not found" >&2
     return 1
   fi
+  export_bun_path "$bun_bin"
   printf '%s\n' "$bun_bin"
 }
 
@@ -142,14 +154,17 @@ fi
 
 if [[ $# -eq 0 ]]; then
   BUN_BIN="$(ensure_bun)"
+  export PATH="$(dirname "$BUN_BIN"):$PATH"
   exec "$BUN_BIN" install
 elif [[ "$1" == "bun" ]]; then
   BUN_BIN="$(ensure_bun)"
+  export PATH="$(dirname "$BUN_BIN"):$PATH"
   shift
   exec "$BUN_BIN" "$@"
 elif [[ "$1" == "pnpm" || "$1" == "npm" || "$1" == "yarn" ]]; then
   PATH="$HOME/.bun/bin:$PATH" exec "$@"
 else
   BUN_BIN="$(ensure_bun)"
+  export PATH="$(dirname "$BUN_BIN"):$PATH"
   exec "$BUN_BIN" install "$@"
 fi

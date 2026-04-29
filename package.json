@@ -8,6 +8,18 @@
   "scripts": {
     "mobile": "cd apps/mobile && bun run start",
     "server": "cd apps/server && bun run dev",
-    "dev": "bun run server & bun run mobile"
+    "dev": "bun run server & bun run mobile",
+    "typecheck": "bun run --cwd apps/mobile typecheck && bun run --cwd apps/server typecheck && bun run --cwd packages/shared typecheck",
+    "lint": "eslint .",
+    "validate": "bun run typecheck && bun run lint",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "lefthook": "^1.10.10",
+    "eslint": "^9.17.0",
+    "typescript-eslint": "^8.19.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "@eslint/js": "^9.17.0"
   }
 }
