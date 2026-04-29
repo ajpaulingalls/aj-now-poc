@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -92,19 +95,58 @@ function makeLocalDraftId() {
   return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function makeLocalMediaAttachment(type: MediaType): MediaAttachment {
-  const id = `media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const extension = mediaTypeExtensions[type];
+function makeMediaId() {
+  return `media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function filenameFromUri(uri: string, fallbackType: MediaType, capturedAt: string) {
+  const pathFilename = uri.split('/').pop()?.split('?')[0];
+  if (pathFilename?.includes('.')) return pathFilename;
+
+  return `${fallbackType}-${capturedAt.replace(/[:.]/g, '-')}.${mediaTypeExtensions[fallbackType]}`;
+}
+
+async function fileSizeForUri(uri: string) {
+  try {
+    const info = await FileSystem.getInfoAsync(uri, { size: true });
+    return info.exists && typeof info.size === 'number' ? info.size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function makePickerMediaAttachment(type: Extract<MediaType, 'photo' | 'video'>, asset: ImagePicker.ImagePickerAsset): MediaAttachment {
+  const capturedAt = new Date().toISOString();
 
   return {
-    id,
+    id: makeMediaId(),
     type,
-    uri: `local://capture/${id}.${extension}`,
-    filename: `${type}-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
-    mimeType: mediaTypeMimeDefaults[type],
-    sizeBytes: 0,
+    uri: asset.uri,
+    filename: asset.fileName ?? filenameFromUri(asset.uri, type, capturedAt),
+    mimeType: asset.mimeType ?? mediaTypeMimeDefaults[type],
+    sizeBytes: asset.fileSize ?? 0,
+    durationMs: asset.duration ?? undefined,
+    width: asset.width,
+    height: asset.height,
     caption: `${mediaTypeLabels[type]} from field capture`,
-    capturedAt: new Date().toISOString(),
+    capturedAt,
+    uploadStatus: 'pending',
+  };
+}
+
+function makeAudioMediaAttachment(uri: string, sizeBytes: number, durationMs?: number): MediaAttachment {
+  const capturedAt = new Date().toISOString();
+
+  return {
+    id: makeMediaId(),
+    type: 'audio',
+    uri,
+    filename: filenameFromUri(uri, 'audio', capturedAt),
+    mimeType: mediaTypeMimeDefaults.audio,
+    sizeBytes,
+    durationMs,
+    caption: 'Audio from field capture',
+    capturedAt,
     uploadStatus: 'pending',
   };
 }
@@ -169,6 +211,9 @@ export default function App() {
     'Early interviews suggest residents are watching regional inflation and fuel prices closely while government officials prepare a new policy briefing.'
   );
   const [mediaAttachments, setMediaAttachments] = useState<MediaAttachment[]>([]);
+  const [isCapturingMedia, setIsCapturingMedia] = useState<MediaType | null>(null);
+  const [audioRecording, setAudioRecording] = useState<Audio.Recording | null>(null);
+  const [audioStartedAt, setAudioStartedAt] = useState<number | null>(null);
 
   const breakingAssignments = useMemo(
     () => assignments.filter((assignment) => assignment.priority === 'breaking' || assignment.priority === 'urgent'),
@@ -433,9 +478,152 @@ export default function App() {
     setActiveTab('assignments');
   }
 
-  function addMediaAttachment(type: MediaType) {
-    setMediaAttachments((current) => [makeLocalMediaAttachment(type), ...current]);
-    setDraftNotice(`${mediaTypeLabels[type]} attachment added to this draft.`);
+  async function ensureCameraPermission() {
+    const result = await ImagePicker.requestCameraPermissionsAsync();
+    if (!result.granted) {
+      Alert.alert('Camera access needed', 'Enable camera permissions to capture photos and videos for this story.');
+      return false;
+    }
+
+    return true;
+  }
+
+  async function ensureMicrophonePermission() {
+    const result = await Audio.requestPermissionsAsync();
+    if (!result.granted) {
+      Alert.alert('Microphone access needed', 'Enable microphone permissions to record audio for this story.');
+      return false;
+    }
+
+    return true;
+  }
+
+  async function addCapturedMediaAttachment(type: Extract<MediaType, 'photo' | 'video'>) {
+    if (isCapturingMedia) return;
+
+    const hasPermission = await ensureCameraPermission();
+    if (!hasPermission) return;
+
+    setIsCapturingMedia(type);
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: type === 'photo' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: false,
+        quality: type === 'photo' ? 0.82 : 1,
+        videoMaxDuration: 180,
+      });
+
+      if (result.canceled || !result.assets.length) {
+        setDraftNotice(`${mediaTypeLabels[type]} capture cancelled.`);
+        return;
+      }
+
+      const attachment = makePickerMediaAttachment(type, result.assets[0]);
+      setMediaAttachments((current) => [attachment, ...current]);
+      setDraftNotice(`${mediaTypeLabels[type]} captured and attached to this draft.`);
+    } catch (error) {
+      console.error(`Failed to capture ${type}`, error);
+      Alert.alert('Capture failed', `Could not capture ${mediaTypeLabels[type].toLowerCase()}. Please try again.`);
+    } finally {
+      setIsCapturingMedia(null);
+    }
+  }
+
+  async function addLibraryMediaAttachment(type: Exclude<MediaType, 'audio'>) {
+    if (isCapturingMedia) return;
+
+    setIsCapturingMedia(type);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: type === 'photo' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: false,
+        quality: type === 'photo' ? 0.82 : 1,
+      });
+
+      if (result.canceled || !result.assets.length) {
+        setDraftNotice(`${mediaTypeLabels[type]} selection cancelled.`);
+        return;
+      }
+
+      const attachment = makePickerMediaAttachment(type === 'document' ? 'photo' : type, result.assets[0]);
+      const normalizedAttachment = type === 'document' ? { ...attachment, type: 'document' as const, mimeType: result.assets[0].mimeType ?? mediaTypeMimeDefaults.document } : attachment;
+      setMediaAttachments((current) => [normalizedAttachment, ...current]);
+      setDraftNotice(`${mediaTypeLabels[type]} selected and attached to this draft.`);
+    } catch (error) {
+      console.error(`Failed to select ${type}`, error);
+      Alert.alert('Selection failed', `Could not select ${mediaTypeLabels[type].toLowerCase()}. Please try again.`);
+    } finally {
+      setIsCapturingMedia(null);
+    }
+  }
+
+  async function startAudioRecording() {
+    if (audioRecording || isCapturingMedia) return;
+
+    const hasPermission = await ensureMicrophonePermission();
+    if (!hasPermission) return;
+
+    setIsCapturingMedia('audio');
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      setAudioRecording(recording);
+      setAudioStartedAt(Date.now());
+      setDraftNotice('Recording audio… tap Stop when finished.');
+    } catch (error) {
+      console.error('Failed to start audio recording', error);
+      setIsCapturingMedia(null);
+      Alert.alert('Recording failed', 'Could not start audio recording. Please try again.');
+    }
+  }
+
+  async function stopAudioRecording() {
+    if (!audioRecording) return;
+
+    const recording = audioRecording;
+    const startedAt = audioStartedAt;
+    setAudioRecording(null);
+    setAudioStartedAt(null);
+
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      if (!uri) {
+        setDraftNotice('Audio recording stopped, but no file was created.');
+        return;
+      }
+
+      const status = await recording.getStatusAsync();
+      const sizeBytes = await fileSizeForUri(uri);
+      const durationMs = 'durationMillis' in status && typeof status.durationMillis === 'number' ? status.durationMillis : startedAt ? Date.now() - startedAt : undefined;
+      setMediaAttachments((current) => [makeAudioMediaAttachment(uri, sizeBytes, durationMs), ...current]);
+      setDraftNotice('Audio recording attached to this draft.');
+    } catch (error) {
+      console.error('Failed to stop audio recording', error);
+      Alert.alert('Recording failed', 'Could not save audio recording. Please try again.');
+    } finally {
+      setIsCapturingMedia(null);
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+    }
+  }
+
+  async function handleMediaAction(type: MediaType) {
+    if (type === 'photo' || type === 'video') {
+      await addCapturedMediaAttachment(type);
+      return;
+    }
+
+    if (type === 'audio') {
+      await startAudioRecording();
+      return;
+    }
+
+    await addLibraryMediaAttachment('document');
   }
 
   function removeMediaAttachment(id: string) {
@@ -818,12 +1006,34 @@ export default function App() {
                   placeholder="Type notes, pasted transcript, or summary from an interview…"
                   multiline
                 />
+                {audioRecording ? (
+                  <Pressable style={styles.recordingBanner} onPress={stopAudioRecording}>
+                    <Text style={styles.recordingIcon}>●</Text>
+                    <View style={styles.recordingTextBlock}>
+                      <Text style={styles.recordingTitle}>Recording audio</Text>
+                      <Text style={styles.recordingDetail}>Tap to stop and attach this recording</Text>
+                    </View>
+                  </Pressable>
+                ) : null}
                 <View style={styles.captureGrid}>
                   {(Object.keys(mediaTypeLabels) as MediaType[]).map((type) => (
-                    <Pressable key={type} style={styles.captureAction} onPress={() => addMediaAttachment(type)}>
+                    <Pressable
+                      key={type}
+                      style={[styles.captureAction, isCapturingMedia ? styles.disabledAction : null]}
+                      onPress={() => handleMediaAction(type)}
+                      disabled={Boolean(isCapturingMedia)}
+                    >
                       <Text style={styles.captureIcon}>{mediaTypeIcons[type]}</Text>
-                      <Text style={styles.captureLabel}>Add {mediaTypeLabels[type]}</Text>
-                      <Text style={styles.captureDetail}>Queue local {mediaTypeLabels[type].toLowerCase()} metadata</Text>
+                      <Text style={styles.captureLabel}>{type === 'audio' ? 'Record' : type === 'document' ? 'Pick' : 'Capture'} {mediaTypeLabels[type]}</Text>
+                      <Text style={styles.captureDetail}>
+                        {type === 'photo'
+                          ? 'Launch camera'
+                          : type === 'video'
+                            ? 'Launch video recorder'
+                            : type === 'audio'
+                              ? 'Use microphone'
+                              : 'Choose from library'}
+                      </Text>
                     </Pressable>
                   ))}
                 </View>
@@ -839,7 +1049,7 @@ export default function App() {
                   </View>
 
                   {mediaAttachments.length === 0 ? (
-                    <Text style={styles.emptyStateText}>No media attached yet. Use the buttons above to queue local media metadata for this draft.</Text>
+                    <Text style={styles.emptyStateText}>No media attached yet. Use the buttons above to capture photos, record video or audio, or choose existing media for this draft.</Text>
                   ) : (
                     <View style={styles.attachmentList}>
                       {mediaAttachments.map((attachment) => (
@@ -1278,6 +1488,12 @@ const styles = StyleSheet.create({
   captureLabel: { fontSize: 16, fontWeight: '900', color: '#111827' },
   captureDetail: { color: '#78716C', marginTop: 2 },
   mediaPanel: { backgroundColor: '#FFFCF7', borderRadius: 18, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, gap: spacing.sm },
+  disabledAction: { opacity: 0.55 },
+  recordingBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md, borderRadius: 16, backgroundColor: '#FDECEC', borderWidth: 1, borderColor: '#F1B6B6' },
+  recordingIcon: { color: colors.breaking, fontSize: 18, fontWeight: '800' },
+  recordingTextBlock: { flex: 1 },
+  recordingTitle: { fontWeight: '800', color: colors.breaking },
+  recordingDetail: { color: '#7A2D2D', fontSize: 12 },
   mediaPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: spacing.sm },
   mediaPanelTitleBlock: { flex: 1 },
   attachmentCountPill: { minWidth: 34, height: 34, borderRadius: 17, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
