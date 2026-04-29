@@ -67,6 +67,13 @@ const mediaTypeLabels: Record<MediaType, string> = {
   document: 'Document',
 };
 
+const mediaTypeIcons: Record<MediaType, string> = {
+  photo: '📷',
+  video: '🎥',
+  audio: '🎙️',
+  document: '📄',
+};
+
 const mediaTypeMimeDefaults: Record<MediaType, string> = {
   photo: 'image/jpeg',
   video: 'video/mp4',
@@ -812,10 +819,47 @@ export default function App() {
                   multiline
                 />
                 <View style={styles.captureGrid}>
-                  <CaptureAction label="Photo" detail="Camera roll" />
-                  <CaptureAction label="Video" detail="Clip upload" />
-                  <CaptureAction label="Audio" detail="Transcript" />
-                  <CaptureAction label="Location" detail="Geo tag" />
+                  {(Object.keys(mediaTypeLabels) as MediaType[]).map((type) => (
+                    <Pressable key={type} style={styles.captureAction} onPress={() => addMediaAttachment(type)}>
+                      <Text style={styles.captureIcon}>{mediaTypeIcons[type]}</Text>
+                      <Text style={styles.captureLabel}>Add {mediaTypeLabels[type]}</Text>
+                      <Text style={styles.captureDetail}>Queue local {mediaTypeLabels[type].toLowerCase()} metadata</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <View style={styles.mediaPanel}>
+                  <View style={styles.mediaPanelHeader}>
+                    <View style={styles.mediaPanelTitleBlock}>
+                      <Text style={styles.cardTitle}>Media attachments</Text>
+                      <Text style={styles.subtle}>Attachments stay with the draft, including when saved offline.</Text>
+                    </View>
+                    <View style={styles.attachmentCountPill}>
+                      <Text style={styles.attachmentCountText}>{mediaAttachments.length}</Text>
+                    </View>
+                  </View>
+
+                  {mediaAttachments.length === 0 ? (
+                    <Text style={styles.emptyStateText}>No media attached yet. Use the buttons above to queue local media metadata for this draft.</Text>
+                  ) : (
+                    <View style={styles.attachmentList}>
+                      {mediaAttachments.map((attachment) => (
+                        <View key={attachment.id} style={styles.attachmentItem}>
+                          <View style={styles.attachmentIconBubble}>
+                            <Text style={styles.attachmentIcon}>{mediaTypeIcons[attachment.type]}</Text>
+                          </View>
+                          <View style={styles.attachmentMeta}>
+                            <Text style={styles.attachmentName}>{attachment.filename}</Text>
+                            <Text style={styles.attachmentDetails}>
+                              {mediaTypeLabels[attachment.type]} · {formatBytes(attachment.sizeBytes)} · ready for sync
+                            </Text>
+                          </View>
+                          <Pressable style={styles.removeAttachmentButton} onPress={() => removeMediaAttachment(attachment.id)}>
+                            <Text style={styles.removeAttachmentText}>Remove</Text>
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+                  )}
                 </View>
                 <View style={styles.buttonStack}>
                   <Pressable style={styles.secondaryButton} onPress={() => saveOfflineDraft()}>
@@ -864,6 +908,12 @@ export default function App() {
                               ? `Linked to ${assignments.find((assignment) => assignment.id === draft.assignmentId)?.title || 'assignment'}`
                               : 'No assignment link'}
                           </Text>
+                          {draft.mediaAttachments.length > 0 ? (
+                            <Text style={styles.assignmentMeta}>
+                              {draft.mediaAttachments.length} media attachment{draft.mediaAttachments.length === 1 ? '' : 's'} queued ·{' '}
+                              {draft.mediaAttachments.map((attachment) => mediaTypeLabels[attachment.type]).join(', ')}
+                            </Text>
+                          ) : null}
                         </View>
                         <View style={styles.actionRow}>
                           <Pressable style={styles.secondaryButton} onPress={() => syncLocalDraft(draft)} disabled={syncingDraftId === draft.id}>
@@ -1052,16 +1102,6 @@ function AssignmentCard({
   );
 }
 
-function CaptureAction({ label, detail }: { label: string; detail: string }) {
-  return (
-    <View style={styles.captureAction}>
-      <Text style={styles.captureLabel}>{label}</Text>
-      <Text style={styles.captureDetail}>{detail}</Text>
-    </View>
-  );
-}
-
-
 function SafetyCheckInCard({ checkIn }: { checkIn: SafetyCheckIn }) {
   const isEmergency = checkIn.status === 'emergency' || checkIn.status === 'alert';
   return (
@@ -1233,9 +1273,25 @@ const styles = StyleSheet.create({
   textArea: { minHeight: 130, textAlignVertical: 'top' },
   textAreaSmall: { minHeight: 88, textAlignVertical: 'top' },
   captureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  captureAction: { width: '48%', borderRadius: 16, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, backgroundColor: '#FFFCF7' },
+  captureAction: { width: '48%', borderRadius: 16, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, backgroundColor: '#FFFCF7', gap: 4 },
+  captureIcon: { fontSize: 22 },
   captureLabel: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  captureDetail: { color: '#78716C', marginTop: 4 },
+  captureDetail: { color: '#78716C', marginTop: 2 },
+  mediaPanel: { backgroundColor: '#FFFCF7', borderRadius: 18, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, gap: spacing.sm },
+  mediaPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: spacing.sm },
+  mediaPanelTitleBlock: { flex: 1 },
+  attachmentCountPill: { minWidth: 34, height: 34, borderRadius: 17, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  attachmentCountText: { color: '#111827', fontWeight: '900' },
+  emptyStateText: { color: '#78716C', fontSize: 13, lineHeight: 18 },
+  attachmentList: { gap: spacing.sm },
+  attachmentItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.sm },
+  attachmentIconBubble: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F5EFE2', alignItems: 'center', justifyContent: 'center' },
+  attachmentIcon: { fontSize: 18 },
+  attachmentMeta: { flex: 1 },
+  attachmentName: { color: '#111827', fontWeight: '800' },
+  attachmentDetails: { color: '#78716C', fontSize: 12, marginTop: 2 },
+  removeAttachmentButton: { borderRadius: 999, borderWidth: 1, borderColor: '#E7E0D1', paddingHorizontal: 10, paddingVertical: 6 },
+  removeAttachmentText: { color: colors.error, fontWeight: '800', fontSize: 12 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tag: { color: '#7C2D12', backgroundColor: '#FFEDD5', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12, fontWeight: '700' },
   dangerButton: { backgroundColor: '#B91C1C', borderRadius: 14, alignItems: 'center', paddingVertical: 14, marginTop: 4 },
