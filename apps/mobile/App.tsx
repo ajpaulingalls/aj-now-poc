@@ -92,6 +92,7 @@ export default function App() {
   const [localDraftsLoaded, setLocalDraftsLoaded] = useState(false);
   const [syncingDraftId, setSyncingDraftId] = useState<string | null>(null);
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('Market reaction from Doha');
   const [draftBody, setDraftBody] = useState(
@@ -106,6 +107,11 @@ export default function App() {
   const activeAssignments = useMemo(
     () => assignments.filter((assignment) => assignment.status !== 'filed' && assignment.status !== 'published'),
     [assignments]
+  );
+
+  const selectedAssignment = useMemo(
+    () => assignments.find((assignment) => assignment.id === selectedAssignmentId),
+    [assignments, selectedAssignmentId]
   );
 
   async function loadData(showSpinner = true) {
@@ -125,6 +131,13 @@ export default function App() {
       setAssignments(assignmentData);
       setStories(storyData);
       setSafetyHistory(checkInData);
+      setSelectedAssignmentId((current) => {
+        if (current && assignmentData.some((assignment) => assignment.id === current)) return current;
+        const nextActiveAssignment = assignmentData.find(
+          (assignment) => assignment.status !== 'filed' && assignment.status !== 'published'
+        );
+        return nextActiveAssignment?.id ?? null;
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to load Reporter App data';
       setError(message);
@@ -169,7 +182,7 @@ export default function App() {
       id: makeLocalDraftId(),
       title: draftTitle.trim() || 'Untitled field draft',
       body: draftBody.trim(),
-      assignmentId: activeAssignments[0]?.id,
+      assignmentId: selectedAssignmentId ?? undefined,
       tags: ['offline', 'field-report'],
       status: 'queued',
       createdAt: now,
@@ -186,7 +199,11 @@ export default function App() {
     setLocalDrafts((current) => [draft, ...current]);
     setDraftTitle('');
     setDraftBody('');
-    setDraftNotice('Draft saved to the offline queue on this device.');
+    setDraftNotice(
+      selectedAssignment
+        ? `Draft saved to offline queue for ${selectedAssignment.title}.`
+        : 'Draft saved to the offline queue without an assignment link.'
+    );
     setActiveTab('offline');
     if (showAlert) Alert.alert('Saved offline', 'This draft will remain on this device until you sync or discard it.');
     return draft;
@@ -482,8 +499,61 @@ export default function App() {
 
           {activeTab === 'capture' && (
             <View style={styles.section}>
+              <View style={styles.card}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Assignment link</Text>
+                  <Text style={styles.badge}>{activeAssignments.length} active</Text>
+                </View>
+                <Text style={styles.subtle}>Choose the assignment this story belongs to before saving or submitting.</Text>
+                {activeAssignments.length === 0 ? (
+                  <Text style={styles.emptyState}>No active assignments are available. You can still file an unassigned draft.</Text>
+                ) : (
+                  <View style={styles.assignmentPickerList}>
+                    {activeAssignments.map((assignment) => {
+                      const isSelected = assignment.id === selectedAssignmentId;
+                      return (
+                        <Pressable
+                          key={assignment.id}
+                          style={[styles.assignmentOption, isSelected && styles.assignmentOptionSelected]}
+                          onPress={() => setSelectedAssignmentId(assignment.id)}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.assignmentOptionTitle, isSelected && styles.assignmentOptionTitleSelected]}>
+                              {assignment.title}
+                            </Text>
+                            <Text style={styles.assignmentOptionMeta}>
+                              {assignment.bureau} • {assignment.priority.toUpperCase()} • due {formatTime(assignment.deadline ?? assignment.updatedAt)}
+                            </Text>
+                          </View>
+                          <Text style={[styles.assignmentOptionCheck, isSelected && styles.assignmentOptionCheckSelected]}>
+                            {isSelected ? 'Selected' : 'Select'}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                    <Pressable
+                      style={[styles.assignmentOption, selectedAssignmentId === null && styles.assignmentOptionSelected]}
+                      onPress={() => setSelectedAssignmentId(null)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.assignmentOptionTitle, selectedAssignmentId === null && styles.assignmentOptionTitleSelected]}>
+                          File without assignment
+                        </Text>
+                        <Text style={styles.assignmentOptionMeta}>Use for tips, unscheduled updates, or field notes.</Text>
+                      </View>
+                      <Text style={[styles.assignmentOptionCheck, selectedAssignmentId === null && styles.assignmentOptionCheckSelected]}>
+                        {selectedAssignmentId === null ? 'Selected' : 'Select'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+
               <Text style={styles.sectionTitle}>Story capture</Text>
               <Text style={styles.subtle}>PoC draft composer with AI summary/tag simulation through the backend.</Text>
+              <Text style={styles.assignmentLinkNotice}>
+                {selectedAssignment ? `Linked to: ${selectedAssignment.title}` : 'No assignment selected'}
+              </Text>
               {draftNotice && <Text style={styles.noticeText}>{draftNotice}</Text>}
               <View style={styles.card}>
                 <Text style={styles.inputLabel}>Story title</Text>
@@ -778,6 +848,74 @@ const styles = StyleSheet.create({
   metricRed: { color: '#E31B23' },
   metricLabel: { color: '#78716C', fontWeight: '800', textTransform: 'uppercase', fontSize: 11 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: spacing.md, borderWidth: 1, borderColor: '#E7E0D1', gap: 12 },
+  sectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  badge: {
+    backgroundColor: colors.brandLight,
+    borderRadius: 999,
+    color: colors.brand,
+    fontSize: 12,
+    fontWeight: '800',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    textTransform: 'uppercase',
+  },
+  emptyState: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 14,
+    color: colors.gray600,
+    marginTop: spacing.md,
+    padding: spacing.md,
+  },
+  assignmentPickerList: {
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  assignmentOption: {
+    alignItems: 'center',
+    borderColor: colors.gray200,
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  assignmentOptionSelected: {
+    backgroundColor: colors.brandLight,
+    borderColor: colors.brand,
+  },
+  assignmentOptionTitle: {
+    color: colors.gray900,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  assignmentOptionTitleSelected: {
+    color: colors.brand,
+  },
+  assignmentOptionMeta: {
+    color: colors.gray600,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  assignmentOptionCheck: {
+    color: colors.gray600,
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  assignmentOptionCheckSelected: {
+    color: colors.brand,
+  },
+  assignmentLinkNotice: {
+    color: colors.brand,
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: spacing.sm,
+  },
   cardDark: { backgroundColor: '#111111', borderRadius: 22, padding: spacing.md, gap: 8 },
   cardTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
   cardTitleLight: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
