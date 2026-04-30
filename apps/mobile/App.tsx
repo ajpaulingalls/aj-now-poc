@@ -21,6 +21,34 @@ import {
 import type { Assignment, MediaAttachment, MediaType, SafetyCheckIn, SafetyStatus, Story, User } from '@aj-now/shared';
 import { colors, spacing } from '@aj-now/shared';
 
+const cloud = {
+  blue: '#5EA7FF',
+  blueDark: '#1D4ED8',
+  blueSoft: '#EAF4FF',
+  sky: '#F4FAFF',
+  mint: '#DDF8EF',
+  peach: '#FFF1DE',
+  lavender: '#F0ECFF',
+  ink: '#0F172A',
+  muted: '#64748B',
+  line: '#D8E7F5',
+  white: '#FFFFFF',
+};
+
+const softShadow = Platform.select({
+  web: {
+    boxShadow: '0 18px 45px rgba(30, 64, 175, 0.10)',
+  },
+  default: {
+    shadowColor: '#2563EB',
+    shadowOpacity: 0.12,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 4,
+  },
+});
+
+
 type ApiEnvelope<T> = { success: boolean; data?: T; error?: string };
 type LocalDraft = {
   id: string;
@@ -250,8 +278,8 @@ export default function App() {
   const [safetyLoading, setSafetyLoading] = useState(false);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const [localDraftsLoaded, setLocalDraftsLoaded] = useState(false);
-  const [syncingDraftId, setSyncingDraftId] = useState<string | null>(null);
-  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  const [_syncingDraftId, setSyncingDraftId] = useState<string | null>(null);
+  const [_draftNotice, setDraftNotice] = useState<string | null>(null);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
   const [focusedAssignmentId, setFocusedAssignmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -564,7 +592,7 @@ export default function App() {
     return uploaded;
   }
 
-  async function syncLocalDraft(draft: LocalDraft) {
+  async function _syncLocalDraft(draft: LocalDraft) {
     if (!user) {
       Alert.alert('Profile unavailable', 'Refresh the app before syncing local drafts.');
       return;
@@ -596,7 +624,7 @@ export default function App() {
     }
   }
 
-  async function syncQueuedItems() {
+  async function _syncQueuedItems() {
     if (!user) {
       Alert.alert('Profile unavailable', 'Refresh the app before syncing queued items.');
       return;
@@ -659,7 +687,7 @@ export default function App() {
     }
   }
 
-  function discardLocalDraft(draft: LocalDraft) {
+  function _discardLocalDraft(draft: LocalDraft) {
     Alert.alert('Discard offline draft?', draft.title, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -780,7 +808,7 @@ export default function App() {
     }
   }
 
-  async function stopAudioRecording() {
+  async function _stopAudioRecording() {
     if (!audioRecording) return;
 
     const recording = audioRecording;
@@ -1170,12 +1198,37 @@ export default function App() {
 
           {activeTab === 'capture' && (
             <View style={styles.section}>
-              <View style={styles.card}>
+              <View style={styles.captureHero}>
+                <View style={styles.captureHeroGlow} />
+                <Text style={styles.heroEyebrow}>Field filing</Text>
+                <Text style={styles.heroTitle}>Shape the story while it is still warm.</Text>
+                <Text style={styles.heroBody}>
+                  Link the assignment, capture the facts, attach the proof, and keep moving.
+                </Text>
+                <View style={styles.heroStatsRow}>
+                  <View style={styles.heroStatPill}>
+                    <Text style={styles.heroStatValue}>{mediaAttachments.length}</Text>
+                    <Text style={styles.heroStatLabel}>media</Text>
+                  </View>
+                  <View style={styles.heroStatPill}>
+                    <Text style={styles.heroStatValue}>{localDrafts.length}</Text>
+                    <Text style={styles.heroStatLabel}>queued</Text>
+                  </View>
+                  <View style={styles.heroStatPill}>
+                    <Text style={styles.heroStatValue}>{selectedAssignment ? '1' : '0'}</Text>
+                    <Text style={styles.heroStatLabel}>linked</Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.cardSoft}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Assignment link</Text>
+                  <View>
+                    <Text style={styles.sectionTitle}>Assignment link</Text>
+                    <Text style={styles.microcopy}>Keep the desk context attached from the first note.</Text>
+                  </View>
                   <Text style={styles.badge}>{activeAssignments.length} active</Text>
                 </View>
-                <Text style={styles.subtle}>Choose the assignment this story belongs to before saving or submitting.</Text>
                 {activeAssignments.length === 0 ? (
                   <Text style={styles.emptyState}>No active assignments are available. You can still file an unassigned draft.</Text>
                 ) : (
@@ -1189,215 +1242,118 @@ export default function App() {
                           onPress={() => setSelectedAssignmentId(assignment.id)}
                           onLongPress={() => openAssignmentDetail(assignment)}
                         >
-                          <View style={{ flex: 1 }}>
-                            <Text style={[styles.assignmentOptionTitle, isSelected && styles.assignmentOptionTitleSelected]}>
-                              {assignment.title}
-                            </Text>
-                            <Text style={styles.assignmentOptionMeta}>
-                              {assignment.bureau} • {assignment.priority.toUpperCase()} • due {formatTime(assignment.deadline ?? assignment.updatedAt)}
-                            </Text>
-                          </View>
-                          <View style={styles.assignmentOptionActions}>
-                            <Text style={[styles.assignmentOptionCheck, isSelected && styles.assignmentOptionCheckSelected]}>
-                              {isSelected ? 'Selected' : 'Select'}
-                            </Text>
-                            <Pressable style={styles.inlineLinkButton} onPress={() => openAssignmentDetail(assignment)}>
-                              <Text style={styles.inlineLinkText}>Details</Text>
+                          <View style={styles.assignmentOptionTopRow}>
+                            <View style={[styles.radioOuter, isSelected && styles.radioOuterSelected]}>
+                              {isSelected && <View style={styles.radioInner} />}
+                            </View>
+                            <View style={styles.assignmentOptionContent}>
+                              <Text style={styles.assignmentOptionTitle}>{assignment.title}</Text>
+                              <Text style={styles.assignmentOptionMeta}>
+                                {assignment.bureau} · {assignment.priority} priority · due {formatTime(assignment.deadline)}
+                              </Text>
+                            </View>
+                            <Pressable style={styles.ghostPill} onPress={() => openAssignmentDetail(assignment)}>
+                              <Text style={styles.ghostPillText}>Details</Text>
                             </Pressable>
                           </View>
                         </Pressable>
                       );
                     })}
-                    <Pressable
-                      style={[styles.assignmentOption, selectedAssignmentId === null && styles.assignmentOptionSelected]}
-                      onPress={() => setSelectedAssignmentId(null)}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.assignmentOptionTitle, selectedAssignmentId === null && styles.assignmentOptionTitleSelected]}>
-                          File without assignment
-                        </Text>
-                        <Text style={styles.assignmentOptionMeta}>Use for tips, unscheduled updates, or field notes.</Text>
-                      </View>
-                      <Text style={[styles.assignmentOptionCheck, selectedAssignmentId === null && styles.assignmentOptionCheckSelected]}>
-                        {selectedAssignmentId === null ? 'Selected' : 'Select'}
-                      </Text>
+                  </View>
+                )}
+                <Pressable
+                  style={[styles.assignmentOption, !selectedAssignmentId && styles.assignmentOptionSelected, styles.unassignedOption]}
+                  onPress={() => setSelectedAssignmentId(null)}
+                >
+                  <View style={styles.assignmentOptionTopRow}>
+                    <View style={[styles.radioOuter, !selectedAssignmentId && styles.radioOuterSelected]}>
+                      {!selectedAssignmentId && <View style={styles.radioInner} />}
+                    </View>
+                    <View style={styles.assignmentOptionContent}>
+                      <Text style={styles.assignmentOptionTitle}>File without assignment</Text>
+                      <Text style={styles.assignmentOptionMeta}>Use this for breaking tips or desk-directed work.</Text>
+                    </View>
+                  </View>
+                </Pressable>
+              </View>
+
+              <View style={styles.cardSoft}>
+                <View style={styles.sectionHeader}>
+                  <View>
+                    <Text style={styles.sectionTitle}>Story draft</Text>
+                    <Text style={styles.microcopy}>A calm writing surface for fast field notes.</Text>
+                  </View>
+                  {selectedAssignment && <Text style={styles.softBadge}>Linked</Text>}
+                </View>
+                <TextInput
+                  value={draftTitle}
+                  onChangeText={setDraftTitle}
+                  placeholder="Headline"
+                  placeholderTextColor="#94A3B8"
+                  style={[styles.input, styles.titleInput]}
+                />
+                <TextInput
+                  value={draftBody}
+                  onChangeText={setDraftBody}
+                  placeholder="What happened? Add context, quotes, names, and what the desk should verify next."
+                  placeholderTextColor="#94A3B8"
+                  multiline
+                  style={[styles.input, styles.textArea]}
+                />
+              </View>
+
+              <View style={styles.mediaCloudCard}>
+                <View style={styles.sectionHeader}>
+                  <View>
+                    <Text style={styles.sectionTitle}>Media cloud</Text>
+                    <Text style={styles.microcopy}>Capture evidence gently, then keep every file close to the draft.</Text>
+                  </View>
+                  <Text style={styles.badge}>{mediaAttachments.length} attached</Text>
+                </View>
+                <View style={styles.attachmentToolbar}>
+                  {Object.entries(mediaTypeIcons).map(([type, icon]) => (
+                    <Pressable key={type} style={styles.attachmentButton} onPress={() => handleMediaAction(type as MediaType)}>
+                      <Text style={styles.attachmentIcon}>{icon}</Text>
+                      <Text style={styles.attachmentButtonText}>{mediaTypeLabels[type as MediaType]}</Text>
                     </Pressable>
+                  ))}
+                </View>
+                {mediaAttachments.length === 0 ? (
+                  <View style={styles.attachmentEmptyState}>
+                    <Text style={styles.attachmentEmptyIcon}>☁️</Text>
+                    <Text style={styles.attachmentEmptyTitle}>No media attached yet</Text>
+                    <Text style={styles.attachmentEmptyText}>Add a photo, clip, voice note, or document when the story needs it.</Text>
+                  </View>
+                ) : (
+                  <View style={styles.attachmentList}>
+                    {mediaAttachments.map((attachment) => (
+                      <View key={attachment.id} style={styles.attachmentCard}>
+                        <View style={styles.attachmentThumb}>
+                          <Text style={styles.attachmentThumbText}>{mediaTypeIcons[attachment.type]}</Text>
+                        </View>
+                        <View style={styles.attachmentInfo}>
+                          <Text style={styles.attachmentName}>{attachment.filename}</Text>
+                          <Text style={styles.attachmentMeta}>
+                            {attachment.type} · {formatBytes(attachment.sizeBytes)} · {attachment.uploadStatus}
+                          </Text>
+                        </View>
+                        <Pressable onPress={() => removeMediaAttachment(attachment.id)} style={styles.removeAttachmentButton}>
+                          <Text style={styles.removeAttachmentText}>Remove</Text>
+                        </Pressable>
+                      </View>
+                    ))}
                   </View>
                 )}
               </View>
 
-              <Text style={styles.sectionTitle}>Story capture</Text>
-              <Text style={styles.subtle}>PoC draft composer with AI summary/tag simulation through the backend.</Text>
-              <Text style={styles.assignmentLinkNotice}>
-                {selectedAssignment ? `Linked to: ${selectedAssignment.title}` : 'No assignment selected'}
-              </Text>
-              {draftNotice && <Text style={styles.noticeText}>{draftNotice}</Text>}
-              <View style={styles.card}>
-                <Text style={styles.inputLabel}>Story title</Text>
-                <TextInput value={draftTitle} onChangeText={setDraftTitle} style={styles.input} placeholder="Working headline" />
-                <Text style={styles.inputLabel}>Field notes / transcript</Text>
-                <TextInput
-                  value={draftBody}
-                  onChangeText={setDraftBody}
-                  style={[styles.input, styles.textArea]}
-                  placeholder="Type notes, pasted transcript, or summary from an interview…"
-                  multiline
-                />
-                {audioRecording ? (
-                  <Pressable style={styles.recordingBanner} onPress={stopAudioRecording}>
-                    <Text style={styles.recordingIcon}>●</Text>
-                    <View style={styles.recordingTextBlock}>
-                      <Text style={styles.recordingTitle}>Recording audio</Text>
-                      <Text style={styles.recordingDetail}>Tap to stop and attach this recording</Text>
-                    </View>
-                  </Pressable>
-                ) : null}
-                <View style={styles.captureGrid}>
-                  {(Object.keys(mediaTypeLabels) as MediaType[]).map((type) => (
-                    <Pressable
-                      key={type}
-                      style={[styles.captureAction, isCapturingMedia ? styles.disabledAction : null]}
-                      onPress={() => handleMediaAction(type)}
-                      disabled={Boolean(isCapturingMedia)}
-                    >
-                      <Text style={styles.captureIcon}>{mediaTypeIcons[type]}</Text>
-                      <Text style={styles.captureLabel}>{type === 'audio' ? 'Record' : type === 'document' ? 'Pick' : 'Capture'} {mediaTypeLabels[type]}</Text>
-                      <Text style={styles.captureDetail}>
-                        {type === 'photo'
-                          ? 'Launch camera'
-                          : type === 'video'
-                            ? 'Launch video recorder'
-                            : type === 'audio'
-                              ? 'Use microphone'
-                              : 'Pick from Files'}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <View style={styles.mediaPanel}>
-                  <View style={styles.mediaPanelHeader}>
-                    <View style={styles.mediaPanelTitleBlock}>
-                      <Text style={styles.cardTitle}>Media attachments</Text>
-                      <Text style={styles.subtle}>Attachments stay with the draft, including when saved offline.</Text>
-                    </View>
-                    <View style={styles.attachmentCountPill}>
-                      <Text style={styles.attachmentCountText}>{mediaAttachments.length}</Text>
-                    </View>
-                  </View>
-
-                  {mediaAttachments.length === 0 ? (
-                    <Text style={styles.emptyStateText}>No media attached yet. Use the buttons above to capture photos, record video or audio, or choose existing media for this draft.</Text>
-                  ) : (
-                    <View style={styles.attachmentList}>
-                      {mediaAttachments.map((attachment) => (
-                        <View key={attachment.id} style={styles.attachmentItem}>
-                          <View style={styles.attachmentIconBubble}>
-                            <Text style={styles.attachmentIcon}>{mediaTypeIcons[attachment.type]}</Text>
-                          </View>
-                          <View style={styles.attachmentMeta}>
-                            <Text style={styles.attachmentName}>{attachment.filename}</Text>
-                            <Text style={styles.attachmentDetails}>
-                              {mediaTypeLabels[attachment.type]} · {formatBytes(attachment.sizeBytes)} · {attachment.uploadStatus === 'uploaded' ? 'uploaded' : attachment.uploadStatus === 'uploading' ? 'uploading…' : 'ready for upload'}
-                            </Text>
-                          </View>
-                          <Pressable style={styles.removeAttachmentButton} onPress={() => removeMediaAttachment(attachment.id)}>
-                            <Text style={styles.removeAttachmentText}>Remove</Text>
-                          </Pressable>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-                <View style={styles.buttonStack}>
-                  <Pressable style={styles.secondaryButton} onPress={() => saveOfflineDraft()}>
-                    <Text style={styles.secondaryButtonText}>Save offline draft</Text>
-                  </Pressable>
-                  <Pressable style={styles.primaryButton} onPress={submitStory}>
-                    <Text style={styles.primaryButtonText}>Save AI-assisted draft</Text>
-                  </Pressable>
-                </View>
-                <Text style={styles.hintSmall}>If the backend is unavailable, AI-assisted save automatically falls back to the offline queue.</Text>
-              </View>
-            </View>
-          )}
-
-          {activeTab === 'offline' && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Offline queue</Text>
-              <Text style={styles.subtle}>Drafts, captured media, and safety check-ins prepared for sync when connectivity returns.</Text>
-              {draftNotice && <Text style={styles.noticeText}>{draftNotice}</Text>}
-              {safetyNotice && <Text style={styles.noticeText}>{safetyNotice}</Text>}
-              {(localDrafts.length > 0 || localSafetyCheckIns.length > 0) && (
-                <Pressable style={styles.primaryButton} onPress={syncQueuedItems}>
-                  <Text style={styles.primaryButtonText}>Sync all queued items</Text>
+              <View style={styles.captureActions}>
+                <Pressable style={styles.secondaryButton} onPress={() => saveOfflineDraft()}>
+                  <Text style={styles.secondaryButtonText}>Save offline</Text>
                 </Pressable>
-              )}
-
-              {localDrafts.length === 0 && localSafetyCheckIns.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <Text style={styles.subtle}>No local offline items yet.</Text>
-                </View>
-              ) : null}
-
-              {localDrafts.length > 0 ? (
-                <View style={styles.queueGroup}>
-                  <Text style={styles.cardTitle}>Queued drafts</Text>
-                  {localDrafts.map((draft) => (
-                    <View key={draft.id} style={styles.card}>
-                      <View style={styles.cardHeaderRow}>
-                        <View>
-                          <Text style={styles.cardTitle}>{draft.title}</Text>
-                          <Text style={styles.assignmentMeta}>
-                            {draft.status} · {new Date(draft.updatedAt).toLocaleString()}
-                          </Text>
-                          <Text style={styles.assignmentMeta}>
-                            {draft.assignmentId
-                              ? `Linked to ${assignments.find((assignment) => assignment.id === draft.assignmentId)?.title || 'assignment'}`
-                              : 'No assignment link'}
-                          </Text>
-                          {draft.mediaAttachments.length > 0 ? (
-                            <Text style={styles.assignmentMeta}>
-                              {draft.mediaAttachments.length} media attachment{draft.mediaAttachments.length === 1 ? '' : 's'} queued ·{' '}
-                              {draft.mediaAttachments.map((attachment) => mediaTypeLabels[attachment.type]).join(', ')}
-                            </Text>
-                          ) : null}
-                        </View>
-                        <View style={styles.actionRow}>
-                          <Pressable style={styles.secondaryButton} onPress={() => syncLocalDraft(draft)} disabled={syncingDraftId === draft.id}>
-                            <Text style={styles.secondaryButtonText}>{syncingDraftId === draft.id ? 'Syncing…' : 'Sync'}</Text>
-                          </Pressable>
-                          <Pressable style={styles.dangerButton} onPress={() => discardLocalDraft(draft)} disabled={syncingDraftId === draft.id}>
-                            <Text style={styles.dangerButtonText}>Discard</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                      <Text style={styles.assignmentBody} numberOfLines={3}>
-                        {draft.body}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-
-              {localSafetyCheckIns.length > 0 ? (
-                <View style={styles.queueGroup}>
-                  <Text style={styles.cardTitle}>Queued safety check-ins</Text>
-                  {localSafetyCheckIns.map((checkIn) => (
-                    <View key={checkIn.id} style={styles.card}>
-                      <View style={styles.cardHeaderRow}>
-                        <View>
-                          <Text style={styles.cardTitle}>
-                            {checkIn.status === 'syncing' ? 'Syncing' : checkIn.status === 'safe' ? 'Safe' : 'Needs attention'}
-                          </Text>
-                          <Text style={styles.assignmentMeta}>{new Date(checkIn.timestamp).toLocaleString()}</Text>
-                        </View>
-                        <Text style={styles.badge}>Offline</Text>
-                      </View>
-                      <Text style={styles.assignmentBody}>{checkIn.message || 'No message provided.'}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
+                <Pressable style={styles.primaryButton} onPress={submitStory}>
+                  <Text style={styles.primaryButtonText}>Submit to desk</Text>
+                </Pressable>
+              </View>
             </View>
           )}
 
@@ -1589,6 +1545,112 @@ const styles = StyleSheet.create({
   tabTextActive: { color: '#111111' },
   content: { flex: 1, backgroundColor: '#F5F1E8' },
   section: { padding: spacing.lg, gap: spacing.md },
+  captureHero: {
+    backgroundColor: cloud.sky,
+    borderColor: '#D8ECFF',
+    borderRadius: 30,
+    borderWidth: 1,
+    overflow: 'hidden',
+    padding: spacing.lg,
+    position: 'relative',
+    ...softShadow,
+  },
+  captureHeroGlow: {
+    backgroundColor: '#D7F0FF',
+    borderRadius: 999,
+    height: 180,
+    opacity: 0.72,
+    position: 'absolute',
+    right: -54,
+    top: -78,
+    width: 180,
+  },
+  heroEyebrow: {
+    color: cloud.blueDark,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
+  heroTitle: {
+    color: cloud.ink,
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: -0.7,
+    lineHeight: 33,
+    maxWidth: 360,
+  },
+  heroBody: {
+    color: cloud.muted,
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: spacing.sm,
+    maxWidth: 420,
+  },
+  heroStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  heroStatPill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.86)',
+    borderColor: '#DCEFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    minWidth: 82,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  heroStatValue: {
+    color: cloud.ink,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  heroStatLabel: {
+    color: cloud.muted,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    marginTop: 2,
+    textTransform: 'uppercase',
+  },
+  cardSoft: {
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderColor: cloud.line,
+    borderRadius: 26,
+    borderWidth: 1,
+    gap: spacing.md,
+    padding: spacing.lg,
+    ...softShadow,
+  },
+  mediaCloudCard: {
+    backgroundColor: '#F8FCFF',
+    borderColor: '#DCEFFF',
+    borderRadius: 28,
+    borderWidth: 1,
+    gap: spacing.md,
+    padding: spacing.lg,
+    ...softShadow,
+  },
+  microcopy: {
+    color: cloud.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  softBadge: {
+    backgroundColor: cloud.mint,
+    borderRadius: 999,
+    color: '#047857',
+    fontSize: 12,
+    fontWeight: '900',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    textTransform: 'uppercase',
+  },
   centered: { flex: 1, backgroundColor: '#F5F1E8', alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   loadingText: { marginTop: 12, color: '#44403C', fontWeight: '700' },
   errorTitle: { fontSize: 22, fontWeight: '900', color: '#111827', marginBottom: 8 },
@@ -1633,29 +1695,36 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   assignmentOption: {
-    alignItems: 'center',
-    borderColor: colors.gray200,
-    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E0ECF8',
+    borderRadius: 20,
     borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
     padding: spacing.md,
   },
   assignmentOptionSelected: {
-    backgroundColor: colors.brandLight,
-    borderColor: colors.brand,
+    backgroundColor: cloud.blueSoft,
+    borderColor: cloud.blue,
+  },
+  assignmentOptionTopRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  assignmentOptionContent: {
+    flex: 1,
   },
   assignmentOptionTitle: {
-    color: colors.gray900,
+    color: cloud.ink,
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   assignmentOptionTitleSelected: {
     color: colors.brand,
   },
   assignmentOptionMeta: {
-    color: colors.gray600,
+    color: cloud.muted,
     fontSize: 12,
+    lineHeight: 17,
     marginTop: 4,
   },
   assignmentOptionCheck: {
@@ -1676,6 +1745,40 @@ const styles = StyleSheet.create({
   assignmentOptionActions: { alignItems: 'flex-end', gap: 6 },
   inlineLinkButton: { paddingHorizontal: 4, paddingVertical: 2 },
   inlineLinkText: { color: colors.brand, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  radioOuter: {
+    alignItems: 'center',
+    borderColor: '#B6D7F5',
+    borderRadius: 999,
+    borderWidth: 2,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+  radioOuterSelected: {
+    borderColor: cloud.blueDark,
+  },
+  radioInner: {
+    backgroundColor: cloud.blueDark,
+    borderRadius: 999,
+    height: 10,
+    width: 10,
+  },
+  ghostPill: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D6E7F8',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  ghostPillText: {
+    color: cloud.blueDark,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  unassignedOption: {
+    marginTop: spacing.xs,
+  },
   detailCard: { backgroundColor: '#FFFCF7', borderRadius: 22, padding: spacing.md, borderWidth: 1, borderColor: colors.brand, gap: 12 },
   detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   detailItem: { flexBasis: '47%', flexGrow: 1, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.sm },
@@ -1720,6 +1823,11 @@ const styles = StyleSheet.create({
   textArea: { minHeight: 130, textAlignVertical: 'top' },
   textAreaSmall: { minHeight: 88, textAlignVertical: 'top' },
   captureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  captureActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
   captureAction: { width: '48%', borderRadius: 16, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.md, backgroundColor: '#FFFCF7', gap: 4 },
   captureIcon: { fontSize: 22 },
   captureLabel: { fontSize: 16, fontWeight: '900', color: '#111827' },
@@ -1738,13 +1846,57 @@ const styles = StyleSheet.create({
   emptyStateText: { color: '#78716C', fontSize: 13, lineHeight: 18 },
   attachmentList: { gap: spacing.sm },
   attachmentItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E7E0D1', padding: spacing.sm },
+  attachmentCard: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: '#DCEBFA', borderRadius: 22, borderWidth: 1, flexDirection: 'row', gap: spacing.sm, padding: spacing.md },
+  attachmentThumb: { alignItems: 'center', backgroundColor: cloud.blueSoft, borderRadius: 18, height: 46, justifyContent: 'center', width: 46 },
+  attachmentThumbText: { fontSize: 22 },
   attachmentIconBubble: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F5EFE2', alignItems: 'center', justifyContent: 'center' },
-  attachmentIcon: { fontSize: 18 },
-  attachmentMeta: { flex: 1 },
-  attachmentName: { color: '#111827', fontWeight: '800' },
+  attachmentIcon: { fontSize: 22 },
+  attachmentInfo: { flex: 1 },
+  attachmentMeta: { color: cloud.muted, fontSize: 12, marginTop: 3, textTransform: 'capitalize' },
+  attachmentName: { color: cloud.ink, fontSize: 14, fontWeight: '900' },
   attachmentDetails: { color: '#78716C', fontSize: 12, marginTop: 2 },
-  removeAttachmentButton: { borderRadius: 999, borderWidth: 1, borderColor: '#E7E0D1', paddingHorizontal: 10, paddingVertical: 6 },
-  removeAttachmentText: { color: colors.error, fontWeight: '800', fontSize: 12 },
+  removeAttachmentButton: { backgroundColor: '#FFF7F7', borderColor: '#F5C2C2', borderRadius: 999, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6 },
+  removeAttachmentText: { color: colors.error, fontSize: 12, fontWeight: '900' },
+  titleInput: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  attachmentToolbar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  attachmentButton: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DCEBFA',
+    borderRadius: 20,
+    borderWidth: 1,
+    flexBasis: '47%',
+    flexGrow: 1,
+    gap: 6,
+    justifyContent: 'center',
+    minHeight: 84,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  attachmentButtonText: {
+    color: cloud.ink,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  attachmentEmptyState: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DCEBFA',
+    borderRadius: 24,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    padding: spacing.lg,
+  },
+  attachmentEmptyIcon: { fontSize: 34, marginBottom: spacing.xs },
+  attachmentEmptyTitle: { color: cloud.ink, fontSize: 16, fontWeight: '900' },
+  attachmentEmptyText: { color: cloud.muted, fontSize: 13, lineHeight: 19, marginTop: 4, maxWidth: 280, textAlign: 'center' },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tag: { color: '#7C2D12', backgroundColor: '#FFEDD5', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12, fontWeight: '700' },
   dangerButton: { backgroundColor: '#B91C1C', borderRadius: 14, alignItems: 'center', paddingVertical: 14, marginTop: 4 },
