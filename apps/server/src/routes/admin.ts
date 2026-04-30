@@ -97,19 +97,6 @@ const displayDate = (value: unknown): string => {
   return Number.isNaN(date.getTime()) ? escapeHtml(value) : date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 };
 
-const slugify = (value: string): string => value
-  .toLowerCase()
-  .trim()
-  .replace(/[^a-z0-9]+/g, '-')
-  .replace(/^-+|-+$/g, '') || `item-${Date.now()}`;
-
-const normalizeTags = (value: string): string => JSON.stringify(
-  value
-    .split(',')
-    .map((tag) => tag.trim())
-    .filter(Boolean)
-);
-
 const parseTags = (value: unknown): string[] => {
   if (!value) return [];
   try {

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -54,7 +55,9 @@ type MediaUploadResponse = {
 };
 type TabKey = 'briefing' | 'assignments' | 'capture' | 'offline' | 'safety' | 'profile';
 
-const API_BASE = 'http://localhost:3001/api';
+const DEFAULT_API_BASE = 'http://localhost:3001/api';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE;
+const IS_WEB = Platform.OS === 'web';
 const LOCAL_DRAFTS_KEY = '@aj-now/local-drafts:v1';
 const LOCAL_SAFETY_QUEUE_KEY = '@aj-now/local-safety-checkins:v1';
 const DEMO_EMAIL = 'demo@aljazeera.net';
@@ -202,10 +205,27 @@ function formatAssignmentLocation(assignment: Assignment) {
   return assignment.location.placeName || `${assignment.location.latitude.toFixed(2)}, ${assignment.location.longitude.toFixed(2)}`;
 }
 
+function buildApiUrl(path: string) {
+  return `${API_BASE}${path}`;
+}
+
+function buildServerUrl(path: string) {
+  const apiRoot = API_BASE.replace(/\/api\/?$/, '');
+  return `${apiRoot}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function requestHeaders(options?: RequestInit) {
+  const headers = new Headers(options?.headers);
+  if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  return headers;
+}
+
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+  const response = await fetch(buildApiUrl(path), {
     ...options,
+    headers: requestHeaders(options),
   });
   const payload = (await response.json()) as ApiEnvelope<T>;
   if (!response.ok || !payload.success) {
@@ -235,6 +255,8 @@ export default function App() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
   const [focusedAssignmentId, setFocusedAssignmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [backendMessage, setBackendMessage] = useState('Checking newsroom API...');
   const [draftTitle, setDraftTitle] = useState('Market reaction from Doha');
   const [draftBody, setDraftBody] = useState(
     'Early interviews suggest residents are watching regional inflation and fuel prices closely while government officials prepare a new policy briefing.'
@@ -258,14 +280,37 @@ export default function App() {
     () => assignments.find((assignment) => assignment.id === selectedAssignmentId),
     [assignments, selectedAssignmentId]
   );
+
   const focusedAssignment = useMemo(
     () => assignments.find((assignment) => assignment.id === focusedAssignmentId),
     [assignments, focusedAssignmentId]
   );
 
+  async function checkBackendStatus() {
+    setBackendStatus('checking');
+    setBackendMessage('Checking newsroom API...');
+    try {
+      const response = await fetch(buildApiUrl('/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: DEMO_EMAIL, password: 'demo' }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setBackendStatus('online');
+      setBackendMessage(`Connected to ${API_BASE}`);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Connection failed';
+      setBackendStatus('offline');
+      setBackendMessage(`Cannot reach ${API_BASE}: ${message}`);
+      return false;
+    }
+  }
+
   async function loadData(showSpinner = true) {
     if (showSpinner) setLoading(true);
     setError(null);
+    setBackendStatus('checking');
     try {
       const login = await api<{ token: string; user: User }>('/auth/login', {
         method: 'POST',
@@ -280,6 +325,8 @@ export default function App() {
       setAssignments(assignmentData);
       setStories(storyData);
       setSafetyHistory(checkInData);
+      setBackendStatus('online');
+      setBackendMessage(`Connected to ${API_BASE}`);
       setSelectedAssignmentId((current) => {
         if (current && assignmentData.some((assignment) => assignment.id === current)) return current;
         const nextActiveAssignment = assignmentData.find(
@@ -289,6 +336,8 @@ export default function App() {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to load Reporter App data';
+      setBackendStatus('offline');
+      setBackendMessage(`Cannot reach ${API_BASE}: ${message}`);
       setError(message);
     } finally {
       setLoading(false);
@@ -319,6 +368,13 @@ export default function App() {
   async function refresh() {
     setRefreshing(true);
     await loadData(false);
+  }
+
+  async function retryBackendConnection() {
+    const ok = await checkBackendStatus();
+    if (ok) {
+      await loadData(false);
+    }
   }
 
   async function loadLocalDrafts() {
@@ -369,6 +425,7 @@ export default function App() {
     setLocalDrafts((current) => [draft, ...current]);
     setDraftTitle('');
     setDraftBody('');
+    setMediaAttachments([]);
     setDraftNotice(
       selectedAssignment
         ? `Draft saved to offline queue for ${selectedAssignment.title}.`
@@ -439,16 +496,20 @@ export default function App() {
     appendFormField(form, 'latitude', attachment.location?.latitude);
     appendFormField(form, 'longitude', attachment.location?.longitude);
 
-    const uploaded = await api<MediaUploadResponse>('/media/upload', {
+    const response = await fetch(buildApiUrl('/media/upload'), {
       method: 'POST',
-      headers: {},
       body: form,
     });
+    const payload = (await response.json()) as ApiEnvelope<MediaUploadResponse>;
+    if (!response.ok || !payload.success || !payload.data) {
+      throw new Error(payload.error || `Upload failed: ${response.status}`);
+    }
+    const uploaded = payload.data;
 
     return {
       ...attachment,
       id: uploaded.id || attachment.id,
-      uri: uploaded.url ? `${API_BASE}${uploaded.url}` : uploaded.uri ? `${API_BASE}${uploaded.uri}` : attachment.uri,
+      uri: uploaded.url ? buildServerUrl(uploaded.url) : uploaded.uri ? buildServerUrl(uploaded.uri) : attachment.uri,
       filename: uploaded.filename || attachment.filename,
       mimeType: uploaded.mimeType || attachment.mimeType,
       sizeBytes: uploaded.sizeBytes || attachment.sizeBytes,
@@ -457,7 +518,7 @@ export default function App() {
     };
   }
 
-  async function uploadStoryAttachments(attachments: MediaAttachment[], storyId: string) {
+  async function uploadStoryAttachments(attachments: MediaAttachment[], storyId: string, draftId?: string) {
     const uploaded: MediaAttachment[] = [];
 
     for (const attachment of attachments) {
@@ -465,7 +526,39 @@ export default function App() {
         uploaded.push(attachment);
         continue;
       }
-      uploaded.push(await uploadMediaAttachment({ ...attachment, uploadStatus: 'uploading' }, storyId));
+
+      if (draftId) {
+        setLocalDrafts((current) =>
+          current.map((draft) =>
+            draft.id === draftId
+              ? {
+                  ...draft,
+                  mediaAttachments: draft.mediaAttachments.map((item) =>
+                    item.id === attachment.id ? { ...item, uploadStatus: 'uploading', uploadProgress: 0.5 } : item
+                  ),
+                }
+              : draft
+          )
+        );
+      }
+
+      const uploadedAttachment = await uploadMediaAttachment({ ...attachment, uploadStatus: 'uploading' }, storyId);
+      uploaded.push(uploadedAttachment);
+
+      if (draftId) {
+        setLocalDrafts((current) =>
+          current.map((draft) =>
+            draft.id === draftId
+              ? {
+                  ...draft,
+                  mediaAttachments: draft.mediaAttachments.map((item) =>
+                    item.id === attachment.id ? uploadedAttachment : item
+                  ),
+                }
+              : draft
+          )
+        );
+      }
     }
 
     return uploaded;
@@ -484,7 +577,7 @@ export default function App() {
       if (!result || result.status !== 'accepted' || !result.serverId) {
         throw new Error(result?.error || 'Draft was not accepted by the sync endpoint.');
       }
-      const uploadedAttachments = await uploadStoryAttachments(draft.mediaAttachments, result.serverId);
+      const uploadedAttachments = await uploadStoryAttachments(draft.mediaAttachments, result.serverId, draft.id);
       setLocalDrafts((current) => current.filter((item) => item.id !== draft.id));
       const uploadedCount = uploadedAttachments.filter((attachment) => attachment.uploadStatus === 'uploaded').length;
       setDraftNotice(
@@ -495,7 +588,9 @@ export default function App() {
       loadData(false);
     } catch (err) {
       setLocalDrafts((current) => current.map((item) => (item.id === draft.id ? { ...item, status: 'queued' } : item)));
-      Alert.alert('Unable to sync draft', err instanceof Error ? err.message : 'Draft remains safely queued offline.');
+      const message = err instanceof Error ? err.message : 'Draft remains safely queued offline.';
+      setDraftNotice(`Sync/upload failed: ${message}`);
+      Alert.alert('Unable to sync draft', message);
     } finally {
       setSyncingDraftId(null);
     }
@@ -524,6 +619,14 @@ export default function App() {
         ...queuedSafetyCheckIns.map(localSafetyCheckInToSyncItem),
       ]);
       const acceptedIds = new Set(response.results.filter((item) => item.status === 'accepted').map((item) => item.id));
+      const draftResults = new Map(response.results.filter((item) => item.status === 'accepted' && item.id).map((item) => [item.id as string, item]));
+      let uploadedCount = 0;
+      for (const draft of queuedDrafts) {
+        const result = draftResults.get(draft.id);
+        if (!result?.serverId || draft.mediaAttachments.length === 0) continue;
+        const uploadedAttachments = await uploadStoryAttachments(draft.mediaAttachments, result.serverId, draft.id);
+        uploadedCount += uploadedAttachments.filter((attachment) => attachment.uploadStatus === 'uploaded').length;
+      }
       setLocalDrafts((current) =>
         current
           .filter((item) => !acceptedIds.has(item.id))
@@ -534,7 +637,11 @@ export default function App() {
           .filter((item) => !acceptedIds.has(item.id))
           .map((item) => (item.status === 'syncing' ? { ...item, status: 'alert' } : item))
       );
-      setDraftNotice(`Synced ${response.accepted} offline item${response.accepted === 1 ? '' : 's'} to the newsroom.`);
+      setDraftNotice(
+        uploadedCount > 0
+          ? `Synced ${response.accepted} offline item${response.accepted === 1 ? '' : 's'} and uploaded ${uploadedCount} attachment${uploadedCount === 1 ? '' : 's'} to the newsroom.`
+          : `Synced ${response.accepted} offline item${response.accepted === 1 ? '' : 's'} to the newsroom.`
+      );
       if (response.rejected > 0) {
         setSafetyNotice(`${response.rejected} offline item${response.rejected === 1 ? '' : 's'} still need attention.`);
       } else {
@@ -546,7 +653,9 @@ export default function App() {
       setLocalSafetyCheckIns((current) =>
         current.map((item) => (item.status === 'syncing' ? { ...item, status: 'alert' } : item))
       );
-      Alert.alert('Unable to sync offline items', err instanceof Error ? err.message : 'Items remain safely queued offline.');
+      const message = err instanceof Error ? err.message : 'Items remain safely queued offline.';
+      setDraftNotice(`Sync/upload failed: ${message}`);
+      Alert.alert('Unable to sync offline items', message);
     }
   }
 
@@ -571,6 +680,7 @@ export default function App() {
   }
 
   async function ensureCameraPermission() {
+    if (IS_WEB) return true;
     const result = await ImagePicker.requestCameraPermissionsAsync();
     if (!result.granted) {
       Alert.alert('Camera access needed', 'Enable camera permissions to capture photos and videos for this story.');
@@ -581,6 +691,7 @@ export default function App() {
   }
 
   async function ensureMicrophonePermission() {
+    if (IS_WEB) return true;
     const result = await Audio.requestPermissionsAsync();
     if (!result.granted) {
       Alert.alert('Microphone access needed', 'Enable microphone permissions to record audio for this story.');
@@ -598,7 +709,7 @@ export default function App() {
 
     setIsCapturingMedia(type);
     try {
-      const result = await ImagePicker.launchCameraAsync({
+      const result = await (IS_WEB ? ImagePicker.launchImageLibraryAsync : ImagePicker.launchCameraAsync)({
         mediaTypes: type === 'photo' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
         allowsEditing: false,
         quality: type === 'photo' ? 0.82 : 1,
@@ -612,7 +723,7 @@ export default function App() {
 
       const attachment = makePickerMediaAttachment(type, result.assets[0]);
       setMediaAttachments((current) => [attachment, ...current]);
-      setDraftNotice(`${mediaTypeLabels[type]} captured and attached to this draft.`);
+      setDraftNotice(`${mediaTypeLabels[type]} ${IS_WEB ? 'selected' : 'captured'} and attached to this draft.`);
     } catch (error) {
       console.error(`Failed to capture ${type}`, error);
       Alert.alert('Capture failed', `Could not capture ${mediaTypeLabels[type].toLowerCase()}. Please try again.`);
@@ -621,7 +732,30 @@ export default function App() {
     }
   }
 
+  async function addWebTestAttachment() {
+    const capturedAt = new Date().toISOString();
+    const content = `AJ Now Expo Web test attachment\nCreated: ${capturedAt}\nHeadline: ${draftTitle || 'Untitled'}\n`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const attachment: MediaAttachment = {
+      id: makeMediaId(),
+      type: 'document',
+      uri: URL.createObjectURL(blob),
+      filename: `expo-web-test-${Date.now()}.txt`,
+      mimeType: 'text/plain',
+      sizeBytes: blob.size,
+      caption: 'Generated Expo Web smoke-test attachment',
+      capturedAt,
+      uploadStatus: 'pending',
+    };
+    setMediaAttachments((current) => [attachment, ...current]);
+    setDraftNotice('Generated a small text attachment for Expo Web upload testing.');
+  }
+
   async function startAudioRecording() {
+    if (IS_WEB) {
+      addWebTestAttachment();
+      return;
+    }
     if (audioRecording || isCapturingMedia) return;
 
     const hasPermission = await ensureMicrophonePermission();
@@ -890,10 +1024,23 @@ export default function App() {
           <Text style={styles.eyebrow}>AJ Now Reporter</Text>
           <Text style={styles.title}>Field Desk</Text>
         </View>
-        <View style={styles.livePill}>
-          <Text style={styles.liveDot}>●</Text>
-          <Text style={styles.liveText}>LIVE SYNC</Text>
+        <View style={[styles.livePill, backendStatus === 'offline' && styles.livePillOffline]}>
+          <Text style={[styles.liveDot, backendStatus === 'offline' && styles.liveDotOffline]}>●</Text>
+          <Text style={styles.liveText}>{backendStatus === 'online' ? 'LIVE SYNC' : backendStatus === 'checking' ? 'CHECKING' : 'OFFLINE'}</Text>
         </View>
+      </View>
+
+      <View style={styles.statusPanel}>
+        <View style={styles.statusTextGroup}>
+          <Text style={styles.statusLabel}>Newsroom API</Text>
+          <Text style={[styles.statusValue, backendStatus === 'offline' && styles.statusValueOffline]}>
+            {backendMessage}
+          </Text>
+          {IS_WEB ? <Text style={styles.statusHint}>Expo Web test mode · Admin: {buildServerUrl('/admin')}</Text> : null}
+        </View>
+        <Pressable onPress={retryBackendConnection} style={styles.statusButton}>
+          <Text style={styles.statusButtonText}>Retry</Text>
+        </Pressable>
       </View>
 
       <ScrollView
@@ -1606,4 +1753,109 @@ const styles = StyleSheet.create({
   profileName: { fontSize: 24, fontWeight: '900', color: '#111827' },
   profileMeta: { color: '#44403C', fontSize: 16, fontWeight: '700' },
   divider: { height: 1, backgroundColor: '#E7E0D1', marginVertical: 4 },
+
+  livePillOffline: {
+    backgroundColor: '#7F1D1D',
+  },
+  liveDotOffline: {
+    color: '#FCA5A5',
+  },
+  statusPanel: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 16,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  statusTextGroup: {
+    flex: 1,
+  },
+  statusLabel: {
+    color: '#9CA3AF',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    fontWeight: '800',
+  },
+  statusValue: {
+    color: '#DCFCE7',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  statusValueOffline: {
+    color: '#FECACA',
+  },
+  statusHint: {
+    color: '#93C5FD',
+    fontSize: 11,
+    marginTop: 4,
+  },
+  statusButton: {
+    backgroundColor: '#1D4ED8',
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  statusButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  testPanel: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 16,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  testTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1D4ED8',
+    marginBottom: 4,
+  },
+  testText: {
+    color: '#334155',
+    lineHeight: 19,
+    marginBottom: spacing.sm,
+  },
+  inlineActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  uploadStatusRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+  },
+  uploadStatusBadge: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: '#FEF3C7',
+    color: '#92400E',
+    fontSize: 11,
+    fontWeight: '800',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  uploadStatusBadgeUploaded: {
+    backgroundColor: '#DCFCE7',
+    color: '#166534',
+  },
+  uploadStatusBadgeUploading: {
+    backgroundColor: '#DBEAFE',
+    color: '#1D4ED8',
+  },
+  uploadStatusBadgeFailed: {
+    backgroundColor: '#FEE2E2',
+    color: '#991B1B',
+  },
+
 });

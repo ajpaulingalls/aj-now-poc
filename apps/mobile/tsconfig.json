@@ -3,8 +3,18 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "@/*": ["./*"],
-      "@aj-now/shared": ["../../packages/shared/src"]
+      "@/*": [
+        "./*"
+      ],
+      "@aj-now/shared": [
+        "../../packages/shared/src"
+      ]
     }
-  }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
 }
