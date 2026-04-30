@@ -1,9 +1,88 @@
 import { Hono } from 'hono';
 import { db } from '../db/database';
 
+
+const authForm = (message = ''): string => `
+  <div class="login-shell">
+    <form class="card login-card" method="post" action="/admin/login">
+      <p class="eyebrow">AJ Now Admin</p>
+      <h1>Editor sign in</h1>
+      <p class="muted">Local MVP guard for the newsroom dashboard. Use the shared editor passcode.</p>
+      ${message ? `<p class="notice danger">${escapeHtml(message)}</p>` : ''}
+      <label>Passcode
+        <input type="password" name="passcode" autofocus required placeholder="Enter admin passcode" />
+      </label>
+      <button type="submit">Enter newsroom</button>
+      <p class="muted tiny">Set <code>ADMIN_PASSCODE</code> to change it. Default for local development: <code>editor</code>.</p>
+    </form>
+  </div>
+`;
+
 export const adminRoutes = new Hono();
 
+adminRoutes.get('/login', (c) => c.html(layout({ title: 'Editor sign in', active: 'login', body: authForm() })));
+
+adminRoutes.post('/login', async (c) => {
+  const body = await c.req.parseBody();
+  if (String(body.passcode ?? '') !== adminPasscode()) {
+    return c.html(layout({ title: 'Editor sign in', active: 'login', body: authForm('Incorrect passcode.') }));
+  }
+  c.header('Set-Cookie', `${ADMIN_COOKIE_NAME}=${ADMIN_COOKIE_VALUE}; Path=/admin; HttpOnly; SameSite=Lax; Max-Age=28800`);
+  return c.redirect('/admin');
+});
+
+adminRoutes.get('/logout', (c) => {
+  c.header('Set-Cookie', `${ADMIN_COOKIE_NAME}=; Path=/admin; HttpOnly; SameSite=Lax; Max-Age=0`);
+  return c.redirect('/admin/login');
+});
+
+adminRoutes.use('*', async (c, next) => {
+  if (!isAdminAuthenticated(c)) {
+    return c.redirect('/admin/login');
+  }
+  await next();
+});
+
 type DbRow = Record<string, any>;
+
+
+const ADMIN_COOKIE_NAME = 'aj_now_admin';
+const ADMIN_COOKIE_VALUE = 'local-editor';
+
+const storyStatuses = [
+  { value: 'draft', label: 'Draft' },
+  { value: 'filed', label: 'Filed' },
+  { value: 'changes_requested', label: 'Request changes' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'published', label: 'Published' },
+  { value: 'rejected', label: 'Rejected' }
+];
+
+const assignmentStatuses = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'assigned', label: 'Assigned' },
+  { value: 'accepted', label: 'Accepted' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'filed', label: 'Filed' },
+  { value: 'complete', label: 'Complete' },
+  { value: 'cancelled', label: 'Cancelled' }
+];
+
+const isAdminAuthenticated = (c: any): boolean => {
+  const cookie = c.req.header('cookie') ?? '';
+  return cookie.split(';').map((part: string) => part.trim()).includes(`${ADMIN_COOKIE_NAME}=${ADMIN_COOKIE_VALUE}`);
+};
+
+const adminPasscode = (): string => process.env.ADMIN_PASSCODE || 'editor';
+
+const statusOptions = (options: Array<{ value: string; label: string }>, current: unknown): string => options
+  .map((option) => `<option value="${escapeHtml(option.value)}" ${String(current ?? '') === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
+  .join('');
+
+const statusActions = (options: Array<{ value: string; label: string }>, current: unknown): string => options
+  .filter((option) => option.value !== current)
+  .map((option) => `<button type="submit" name="status" value="${escapeHtml(option.value)}" class="secondary small ${option.value === 'rejected' ? 'danger-button' : ''}">${escapeHtml(option.label)}</button>`)
+  .join('');
 
 const escapeHtml = (value: unknown): string => String(value ?? '')
   .replace(/&/g, '&amp;')
@@ -40,6 +119,8 @@ const parseTags = (value: unknown): string[] => {
     return String(value).split(',').map((tag) => tag.trim()).filter(Boolean);
   }
 };
+
+const tags = (value: unknown): string => parseTags(value).map((tag) => badge(tag)).join(' ') || '—';
 
 const userName = (id: unknown, users: DbRow[]): string => {
   const user = users.find((candidate) => candidate.id === id);
@@ -153,77 +234,123 @@ adminRoutes.get('/', (c) => {
 });
 
 adminRoutes.get('/assignments', (c) => {
-  const notice = c.req.query('created') ? '<div class="notice">Assignment created and dispatched to the selected reporter.</div>' : '';
+  const notice = c.req.query('created')
+    ? '<div class="notice">Assignment created and dispatched to the selected reporter.</div>'
+    : c.req.query('updated')
+      ? '<div class="notice">Assignment status updated.</div>'
+      : '';
   const users = getAssignableUsers();
   const assignments = db.query('SELECT * FROM assignments ORDER BY CASE priority WHEN "breaking" THEN 0 WHEN "urgent" THEN 1 WHEN "standard" THEN 2 WHEN "feature" THEN 3 END, created_at DESC').all() as DbRow[];
   return c.html(layout({ title: 'Assignments', active: 'assignments', body: `
     <section class="hero"><div><h1>Assignments</h1><p>Create, route, and track newsroom assignments.</p></div></section>
     ${notice}
     <section class="grid">
-      <div class="card span-5"><h2>Create assignment</h2>${assignmentForm(users)}</div>
-      <div class="card span-7"><h2>Assignment board</h2>${assignmentsTable(assignments, users, false)}</div>
+      <div class="card span-4"><h2>Create assignment</h2>${assignmentForm(users)}</div>
+      <div class="card span-8"><h2>Assignment board</h2>${assignmentsTable(assignments, users)}</div>
     </section>` }));
 });
 
 adminRoutes.post('/assignments', async (c) => {
-  const form = await c.req.parseBody();
-  const title = String(form.title || '').trim();
-  const description = String(form.description || '').trim();
-  if (!title || !description) {
-    return c.html(layout({ title: 'Assignment error', active: 'assignments', body: `<div class="notice error">Title and description are required.</div><a class="button" href="/admin/assignments">Back to assignments</a>` }), 400);
-  }
+  const body = await c.req.parseBody();
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  db.query(`INSERT INTO assignments (
-    id, title, slug, description, priority, status, assigned_to, assigned_by, bureau,
-    latitude, longitude, place_name, deadline, tags, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    id,
-    title,
-    slugify(title),
-    description,
-    String(form.priority || 'standard'),
-    String(form.status || 'assigned'),
-    String(form.assigned_to || ''),
-    String(form.assigned_by || 'usr_002'),
-    String(form.bureau || 'Doha'),
-    form.latitude ? Number(form.latitude) : null,
-    form.longitude ? Number(form.longitude) : null,
-    String(form.place_name || ''),
-    String(form.deadline || ''),
-    normalizeTags(String(form.tags || '')),
-    now,
-    now
-  );
+  db.query(`
+    INSERT INTO assignments (id, title, slug, description, status, priority, assigned_to, assigned_by, bureau, place_name, latitude, longitude, deadline, tags, created_at, updated_at)
+    VALUES ($id, $title, $slug, $description, $status, $priority, $assignedTo, $assignedBy, $bureau, $placeName, $latitude, $longitude, $deadline, $tags, $createdAt, $updatedAt)
+  `).run({
+    $id: id,
+    $title: String(body.title || 'Untitled assignment'),
+    $slug: (String(body.title || id).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || id),
+    $description: String(body.description || ''),
+    $status: String(body.status || 'assigned'),
+    $priority: String(body.priority || 'standard'),
+    $assignedTo: String(body.assignedTo || 'usr_001'),
+    $assignedBy: 'usr_004',
+    $bureau: String(body.bureau || 'Doha'),
+    $placeName: String(body.placeName || ''),
+    $latitude: body.latitude ? Number(body.latitude) : null,
+    $longitude: body.longitude ? Number(body.longitude) : null,
+    $deadline: body.deadline ? String(body.deadline) : null,
+    $tags: JSON.stringify(String(body.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean)),
+    $createdAt: now,
+    $updatedAt: now
+  });
   return c.redirect('/admin/assignments?created=1');
 });
 
+adminRoutes.post('/assignments/:id/status', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.parseBody();
+  const status = String(body.status || 'assigned');
+  const allowed = new Set(assignmentStatuses.map((option) => option.value));
+  if (!allowed.has(status)) {
+    return c.text('Invalid assignment status', 400);
+  }
+  const result = db.query('UPDATE assignments SET status = $status, updated_at = $updatedAt WHERE id = $id').run({
+    $id: id,
+    $status: status,
+    $updatedAt: new Date().toISOString()
+  });
+  if (result.changes === 0) return c.notFound();
+  return c.redirect('/admin/assignments?updated=1');
+});
+
 adminRoutes.get('/stories', (c) => {
-  const users = getUsers();
+  const notice = c.req.query('updated') ? '<div class="notice">Story status updated.</div>' : '';
+  const users = getAssignableUsers();
   const stories = db.query('SELECT * FROM stories ORDER BY updated_at DESC').all() as DbRow[];
   return c.html(layout({ title: 'Stories', active: 'stories', body: `
-    <section class="hero"><div><h1>Story review</h1><p>Review filed drafts, inspect copy, and open related media.</p></div></section>
-    <div class="card">${storiesTable(stories, users, false)}</div>` }));
+    <section class="hero"><div><h1>Story review</h1><p>Review incoming copy, request changes, approve, or publish.</p></div></section>
+    ${notice}
+    <div class="card">${storiesTable(stories, users)}</div>` }));
 });
 
 adminRoutes.get('/stories/:id', (c) => {
-  const story = db.query('SELECT * FROM stories WHERE id = ?').get(c.req.param('id')) as DbRow | undefined;
-  if (!story) return c.html(layout({ title: 'Story not found', active: 'stories', body: '<div class="notice error">Story not found.</div>' }), 404);
-  const users = getUsers();
-  const assignment = story.assignment_id ? db.query('SELECT * FROM assignments WHERE id = ?').get(story.assignment_id) as DbRow | undefined : undefined;
-  const media = db.query('SELECT * FROM media WHERE story_id = ? ORDER BY created_at DESC').all(story.id) as DbRow[];
-  return c.html(layout({ title: story.headline, active: 'stories', body: `
-    <section class="hero"><div><h1>${escapeHtml(story.headline)}</h1><p>${badge(story.status)} Filed by ${escapeHtml(userName(story.filed_by, users))} · Updated ${displayDate(story.updated_at)}</p></div><a class="button secondary" href="/admin/stories">Back to stories</a></section>
+  const story = db.query('SELECT * FROM stories WHERE id = $id').get({ $id: c.req.param('id') }) as DbRow | null;
+  if (!story) return c.notFound();
+  const users = getAssignableUsers();
+  const media = db.query('SELECT * FROM media WHERE story_id = $storyId ORDER BY created_at DESC').all({ $storyId: story.id }) as DbRow[];
+  const assignment = story.assignment_id ? db.query('SELECT * FROM assignments WHERE id = $id').get({ $id: story.assignment_id }) as DbRow | null : null;
+  const notice = c.req.query('updated') ? '<div class="notice">Story status updated.</div>' : '';
+  return c.html(layout({ title: story.headline || 'Story detail', active: 'stories', body: `
+    <section class="hero"><div><h1>${escapeHtml(story.headline || 'Untitled story')}</h1><p>${escapeHtml(story.summary || 'No summary yet.')}</p></div><span class="pill">${escapeHtml(story.status)}</span></section>
+    ${notice}
     <section class="grid">
-      <div class="card span-8"><h2>Copy</h2><p><strong>Summary:</strong> ${escapeHtml(story.summary || '—')}</p><div class="story-body">${escapeHtml(story.body || 'No body text yet.')}</div></div>
-      <div class="card span-4"><h2>Desk notes</h2>
-        <p><strong>Assignment:</strong> ${assignment ? `<a href="/admin/assignments">${escapeHtml(assignment.title)}</a>` : '—'}</p>
+      <div class="card span-8">
+        <h2>Copy</h2>
+        <p class="muted">Filed by ${escapeHtml(userName(story.filed_by, users))} • Updated ${displayDate(story.updated_at)}</p>
+        <article>${escapeHtml(story.body || '').replace(/\n/g, '<br>')}</article>
+      </div>
+      <div class="card span-4">
+        <h2>Workflow</h2>
+        ${storyWorkflow(story)}
+        <h2>Metadata</h2>
+        <p><strong>Status:</strong> ${escapeHtml(story.status)}</p>
+        <p><strong>Reporter:</strong> ${escapeHtml(userName(story.filed_by, users))}</p>
+        <p><strong>Assignment:</strong> ${assignment ? escapeHtml(assignment.title) : '—'}</p>
         <p><strong>Location:</strong> ${escapeHtml(story.place_name || '—')}</p>
-        <p><strong>Tags:</strong> ${parseTags(story.tags).map((tag) => badge(tag)).join(' ') || '—'}</p>
-        <p><strong>Created:</strong> ${displayDate(story.created_at)}</p>
+        <p><strong>Tags:</strong> ${tags(story.tags)}</p>
+        <p><strong>Filed:</strong> ${displayDate(story.filed_at)}</p>
       </div>
       <div class="card span-12"><h2>Attachments</h2>${mediaGrid(media)}</div>
     </section>` }));
+});
+
+adminRoutes.post('/stories/:id/status', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.parseBody();
+  const status = String(body.status || 'filed');
+  const allowed = new Set(storyStatuses.map((option) => option.value));
+  if (!allowed.has(status)) {
+    return c.text('Invalid story status', 400);
+  }
+  const result = db.query('UPDATE stories SET status = $status, updated_at = $updatedAt WHERE id = $id').run({
+    $id: id,
+    $status: status,
+    $updatedAt: new Date().toISOString()
+  });
+  if (result.changes === 0) return c.notFound();
+  return c.redirect(`/admin/stories/${encodeURIComponent(id)}?updated=1`);
 });
 
 adminRoutes.get('/media', (c) => {
@@ -243,16 +370,28 @@ adminRoutes.get('/safety', (c) => {
 const metric = (title: string, value: unknown, subtext: string, href: string) => `
   <a class="card span-3" href="${href}" style="color:inherit;text-decoration:none"><div class="muted">${escapeHtml(title)}</div><div class="metric">${escapeHtml(value)}</div><div class="muted">${escapeHtml(subtext)}</div></a>`;
 
-const assignmentsTable = (assignments: DbRow[], users: DbRow[], compact: boolean): string => {
+const assignmentStatusControl = (assignment: DbRow): string => `
+  <form class="inline-form" method="post" action="/admin/assignments/${encodeURIComponent(String(assignment.id))}/status">
+    <select name="status" aria-label="Assignment status">${statusOptions(assignmentStatuses, assignment.status)}</select>
+    <button class="secondary small" type="submit">Update</button>
+  </form>`;
+
+const assignmentsTable = (assignments: DbRow[], users: DbRow[], compact = false): string => {
   if (!assignments.length) return '<p>No assignments yet.</p>';
-  return `<table><thead><tr><th>Assignment</th><th>Priority</th><th>Status</th><th>Reporter</th>${compact ? '' : '<th>Deadline</th>'}</tr></thead><tbody>${assignments.map((assignment) => `
-    <tr><td><strong>${escapeHtml(assignment.title)}</strong><br><span class="muted">${escapeHtml(assignment.place_name || assignment.bureau || '')}</span></td><td>${badge(assignment.priority)}</td><td>${badge(assignment.status)}</td><td>${escapeHtml(userName(assignment.assigned_to, users))}</td>${compact ? '' : `<td>${displayDate(assignment.deadline)}</td>`}</tr>`).join('')}</tbody></table>`;
+  return `<table><thead><tr><th>Assignment</th><th>Priority</th><th>Status</th><th>Reporter</th>${compact ? '' : '<th>Deadline</th><th>Controls</th>'}</tr></thead><tbody>${assignments.map((assignment) => `
+    <tr><td><strong>${escapeHtml(assignment.title)}</strong><br><span class="muted">${escapeHtml(assignment.place_name || assignment.bureau || '')}</span></td><td>${badge(assignment.priority)}</td><td>${badge(assignment.status)}</td><td>${escapeHtml(userName(assignment.assigned_to, users))}</td>${compact ? '' : `<td>${displayDate(assignment.deadline)}</td><td>${assignmentStatusControl(assignment)}</td>`}</tr>`).join('')}</tbody></table>`;
 };
 
-const storiesTable = (stories: DbRow[], users: DbRow[], compact: boolean): string => {
+const storyQuickStatusControl = (story: DbRow): string => `
+  <form class="inline-form" method="post" action="/admin/stories/${encodeURIComponent(String(story.id))}/status">
+    <select name="status" aria-label="Story status">${statusOptions(storyStatuses, story.status)}</select>
+    <button class="secondary small" type="submit">Update</button>
+  </form>`;
+
+const storiesTable = (stories: DbRow[], users: DbRow[], compact = false): string => {
   if (!stories.length) return '<p>No stories yet.</p>';
-  return `<table><thead><tr><th>Story</th><th>Status</th><th>Reporter</th>${compact ? '' : '<th>Updated</th>'}</tr></thead><tbody>${stories.map((story) => `
-    <tr><td><a href="/admin/stories/${encodeURIComponent(story.id)}"><strong>${escapeHtml(story.headline)}</strong></a><br><span class="muted">${escapeHtml(story.summary || story.place_name || '')}</span></td><td>${badge(story.status)}</td><td>${escapeHtml(userName(story.filed_by, users))}</td>${compact ? '' : `<td>${displayDate(story.updated_at)}</td>`}</tr>`).join('')}</tbody></table>`;
+  return `<table><thead><tr><th>Story</th><th>Status</th><th>Reporter</th>${compact ? '' : '<th>Updated</th><th>Controls</th>'}</tr></thead><tbody>${stories.map((story) => `
+    <tr><td><a href="/admin/stories/${encodeURIComponent(String(story.id))}"><strong>${escapeHtml(story.headline || 'Untitled story')}</strong></a><br><span class="muted">${escapeHtml(story.summary || story.place_name || '')}</span></td><td>${badge(story.status)}</td><td>${escapeHtml(userName(story.filed_by, users))}</td>${compact ? '' : `<td>${displayDate(story.updated_at)}</td><td>${storyQuickStatusControl(story)}</td>`}</tr>`).join('')}</tbody></table>`;
 };
 
 const safetyTable = (rows: DbRow[]): string => {
@@ -261,32 +400,55 @@ const safetyTable = (rows: DbRow[]): string => {
     <tr><td><strong>${escapeHtml(row.user_name || row.user_id)}</strong><br><span class="muted">${escapeHtml(row.bureau || '')}</span></td><td>${badge(row.status)}</td><td>${escapeHtml(row.message || '—')}</td><td>${row.latitude && row.longitude ? `${escapeHtml(row.latitude)}, ${escapeHtml(row.longitude)}` : '—'}</td><td>${displayDate(row.timestamp)}</td></tr>`).join('')}</tbody></table>`;
 };
 
+const mediaIcon = (item: DbRow): string => {
+  const mime = String(item.mime_type || '').toLowerCase();
+  const type = String(item.type || '').toLowerCase();
+  if (type === 'audio' || mime.startsWith('audio/')) return '🎧';
+  if (type === 'document' || mime.includes('pdf') || mime.includes('text')) return '📄';
+  return '📎';
+};
+
 const mediaGrid = (media: DbRow[]): string => {
   if (!media.length) return '<p>No uploaded media for this view yet.</p>';
   return `<div class="media-grid">${media.map((item) => {
     const url = item.url || item.uri || '';
     const src = url.startsWith('/api/') ? url : url.startsWith('/media/') ? `/api${url}` : url;
     const type = String(item.type || '').toLowerCase();
-    const preview = type === 'photo' || String(item.mime_type || '').startsWith('image/')
-      ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(item.caption || item.filename || 'Uploaded image')}" />`
-      : type === 'video' || String(item.mime_type || '').startsWith('video/')
-        ? `<video src="${escapeHtml(src)}" controls></video>`
-        : `<div class="media-preview">${escapeHtml(type || 'file')}</div>`;
-    return `<div class="media-card">${preview}<div class="media-body"><strong>${escapeHtml(item.filename || 'Attachment')}</strong><br>${badge(item.type)} ${badge(item.upload_status)}<p class="muted">${escapeHtml(item.caption || item.headline || '')}</p><a href="${escapeHtml(src)}" target="_blank" rel="noreferrer">Open file</a></div></div>`;
+    const mime = String(item.mime_type || '').toLowerCase();
+    const preview = type === 'photo' || mime.startsWith('image/')
+      ? `<div class="media-preview"><img src="${escapeHtml(src)}" alt="${escapeHtml(item.caption || item.filename || 'Uploaded image')}" /></div>`
+      : type === 'video' || mime.startsWith('video/')
+        ? `<div class="media-preview"><video src="${escapeHtml(src)}" controls></video></div>`
+        : type === 'audio' || mime.startsWith('audio/')
+          ? `<div class="media-preview"><audio src="${escapeHtml(src)}" controls></audio></div>`
+          : `<div class="media-preview"><span class="media-icon">${mediaIcon(item)}</span></div>`;
+    return `<div class="media-card media-panel">${preview}<div class="media-body"><strong>${escapeHtml(item.filename || 'Attachment')}</strong><br>${badge(item.type)} ${badge(item.upload_status)}<p class="muted">${escapeHtml(item.caption || item.headline || '')}</p><p class="media-meta">${escapeHtml(item.mime_type || 'unknown type')} • ${escapeHtml(item.size_bytes || '—')} bytes • ${displayDate(item.created_at)}</p><a href="${escapeHtml(src)}" target="_blank" rel="noreferrer">Open file</a></div></div>`;
   }).join('')}</div>`;
 };
+
+const storyWorkflow = (story: DbRow): string => `
+  <form method="post" action="/admin/stories/${encodeURIComponent(String(story.id))}/status">
+    <label for="story-status">Set status</label>
+    <select id="story-status" name="status">${statusOptions(storyStatuses, story.status)}</select>
+    <button type="submit">Update story</button>
+  </form>
+  <div class="workflow" aria-label="Quick story actions">
+    <form class="inline-form" method="post" action="/admin/stories/${encodeURIComponent(String(story.id))}/status">
+      ${statusActions(storyStatuses.filter((option) => ['changes_requested', 'approved', 'published', 'rejected'].includes(option.value)), story.status)}
+    </form>
+  </div>`;
 
 const assignmentForm = (users: DbRow[]): string => `<form method="post" action="/admin/assignments">
   <div class="row"><div class="field-12"><label for="title">Title</label><input id="title" name="title" required placeholder="e.g. Live update from Gaza crossing" /></div></div>
   <div class="row"><div class="field-12"><label for="description">Brief</label><textarea id="description" name="description" required placeholder="What should the reporter capture or file?"></textarea></div></div>
   <div class="row">
-    <div class="field-6"><label for="assigned_to">Reporter</label><select id="assigned_to" name="assigned_to">${users.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(user.bureau)} · ${escapeHtml(user.role)}</option>`).join('')}</select></div>
+    <div class="field-6"><label for="assigned_to">Reporter</label><select id="assigned_to" name="assignedTo">${users.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(user.bureau)} · ${escapeHtml(user.role)}</option>`).join('')}</select></div>
     <div class="field-3"><label for="priority">Priority</label><select id="priority" name="priority"><option>standard</option><option>urgent</option><option>breaking</option><option>feature</option></select></div>
-    <div class="field-3"><label for="status">Status</label><select id="status" name="status"><option>assigned</option><option>pending</option><option>in_progress</option></select></div>
+    <div class="field-3"><label for="status">Status</label><select id="status" name="status"><option>assigned</option><option>pending</option><option>accepted</option><option>in_progress</option></select></div>
   </div>
   <div class="row">
     <div class="field-4"><label for="bureau">Bureau</label><input id="bureau" name="bureau" value="Doha" /></div>
-    <div class="field-4"><label for="place_name">Place</label><input id="place_name" name="place_name" placeholder="City, venue, area" /></div>
+    <div class="field-4"><label for="place_name">Place</label><input id="place_name" name="placeName" placeholder="City, venue, area" /></div>
     <div class="field-4"><label for="deadline">Deadline</label><input id="deadline" name="deadline" type="datetime-local" /></div>
   </div>
   <div class="row">
